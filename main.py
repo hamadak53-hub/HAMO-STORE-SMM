@@ -69,7 +69,6 @@ oauth.register(name="google", client_id=os.getenv("GOOGLE_CLIENT_ID"), client_se
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 serializer = URLSafeTimedSerializer(os.getenv("SECRET_KEY", "change-this-secret-before-production"))
 COOKIE_NAME = "hamo_smm_session"
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 def get_db():
     db = SessionLocal()
