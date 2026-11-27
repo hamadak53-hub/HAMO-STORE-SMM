@@ -293,12 +293,19 @@ def edit_service(service_id: int, body: ServiceBody, _=Depends(admin_only), db: 
     return service_json(item)
 
 @app.delete("/api/admin/services/{service_id}")
-def hide_service(service_id: int, _=Depends(admin_only), db: Session = Depends(get_db)):
+def remove_service(service_id: int, _=Depends(admin_only), db: Session = Depends(get_db)):
     item = db.get(Service, service_id)
     if not item:
         raise HTTPException(404, "الخدمة غير موجودة")
-    item.active = False
+    linked_orders = db.query(Order).filter(Order.service_id == service_id).count()
+    if linked_orders:
+        item.active = False
+        db.commit()
+        return {"ok": True, "removed": False, "archived": True,
+                "message": "تمت إزالة الخدمة من المتجر مع الاحتفاظ بها لسجل الطلبات السابقة"}
+    db.delete(item)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "removed": True, "archived": False,
+            "message": "تمت إزالة الخدمة نهائياً"}
 
 app.mount("/assets", StaticFiles(directory=BASE_DIR), name="assets")
