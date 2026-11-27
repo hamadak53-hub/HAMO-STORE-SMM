@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const serviceGrid = $("serviceGrid"), modal = $("orderModal"), serviceInput = $("serviceName"), feedback = $("formFeedback");
 let selectedServiceId = 0, catalog = [];
-const titles = {tiktok:"خدمات تيك توك",instagram:"خدمات إنستجرام",facebook:"خدمات فيسبوك",youtube:"خدمات يوتيوب"};
+const titles = {tiktok:"خدمات تيك توك",instagram:"خدمات إنستجرام",facebook:"خدمات فيسبوك",youtube:"خدمات يوتيوب",telegram:"خدمات تليجرام"};
 async function loadServices(platform="tiktok"){
   try { const res=await fetch("/api/services"); catalog=await res.json(); } catch(e){ catalog=[]; }
   $("selectedPlatformTitle").textContent=titles[platform]||"الخدمات المتاحة";
