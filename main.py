@@ -635,7 +635,7 @@ def provider_services(_=Depends(admin_only)):
             "refill": bool(item.get("refill", False)), "cancel": bool(item.get("cancel", False)),
             "type": str(item.get("type", "")),
         })
-    return resultt
+    return result
 
 @app.post("/api/admin/provider/import")
 def import_provider_service(body: ProviderImportBody, _=Depends(admin_only),
