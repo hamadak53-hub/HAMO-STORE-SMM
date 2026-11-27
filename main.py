@@ -208,7 +208,8 @@ async def google_login(request: Request):
     if not os.getenv("GOOGLE_CLIENT_ID") or not os.getenv("GOOGLE_CLIENT_SECRET"):
         raise HTTPException(503, "تسجيل Google يحتاج ضبط GOOGLE_CLIENT_ID و GOOGLE_CLIENT_SECRET في إعدادات Render")
     request.session["google_mode"] = "register" if request.query_params.get("mode") == "register" else "login"
-    redirect_uri = request.url_for("google_callback")
+    # Always return Google OAuth to the canonical HAMO STORE domain, not the Render hostname.
+    redirect_uri = "https://hamo-store.com/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri, prompt="select_account")
 
 @app.get("/auth/google/callback", name="google_callback")
