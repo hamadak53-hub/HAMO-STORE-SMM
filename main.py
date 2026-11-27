@@ -385,7 +385,7 @@ def transaction_json(item):
             "kind": item.kind, "reference": item.reference, "note": item.note,
             "created_at": item.created_at.isoformat()}
 
-def deposit_json(item):
+def deposit_json(item, db: Session):
     customer = item.customer_id
     owner = db.get(Customer, customer)
     return {"id": item.id, "customer_id": customer,
@@ -416,7 +416,7 @@ def wallet_summary(user: Customer = Depends(current_user), db: Session = Depends
     deposits = db.scalars(select(DepositRequest).where(
         DepositRequest.customer_id == user.id).order_by(DepositRequest.id.desc()).limit(20)).all()
     return {"balance": wallet.balance, "transactions": [transaction_json(x) for x in txs],
-            "deposits": [deposit_json(x) for x in deposits]}
+            "deposits": [deposit_json(x, db) for x in deposits]}
 
 @app.post("/api/deposits")
 def request_deposit(body: DepositBody, user: Customer = Depends(current_user), db: Session = Depends(get_db)):
@@ -428,13 +428,13 @@ def request_deposit(body: DepositBody, user: Customer = Depends(current_user), d
     db.add(item)
     db.commit()
     db.refresh(item)
-    return {"ok": True, "deposit": deposit_json(item),
+    return {"ok": True, "deposit": deposit_json(item, db),
             "message": "تم تسجيل طلب الشحن، وسيُضاف الرصيد بعد مراجعة الإدارة."}
 
 @app.get("/api/admin/deposits")
 def admin_deposits(_=Depends(admin_only), db: Session = Depends(get_db)):
     rows = db.scalars(select(DepositRequest).order_by(DepositRequest.id.desc()).limit(200)).all()
-    return [deposit_json(x) for x in rows]
+    return [deposit_json(x, db) for x in rows]
 
 @app.patch("/api/admin/deposits/{deposit_id}")
 def review_deposit(deposit_id: int, body: DepositReviewBody,
