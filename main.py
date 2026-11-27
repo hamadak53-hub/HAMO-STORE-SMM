@@ -182,6 +182,8 @@ def register(body: RegisterBody, response: Response, db: Session = Depends(get_d
     user = Customer(name=body.name.strip(), email=email, phone=body.phone.strip(),
                     password_hash=pwd_context.hash(body.password))
     db.add(user)
+    db.flush()
+    db.add(Wallet(customer_id=user.id, balance=0))
     db.commit()
     db.refresh(user)
     set_session(response, {"role": "customer", "id": user.id})
@@ -228,13 +230,23 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     if body.quantity < service.min_quantity or body.quantity > service.max_quantity:
         raise HTTPException(400, f"الكمية يجب أن تكون بين {service.min_quantity} و{service.max_quantity}")
     total = (service.price * body.quantity + 999) // 1000
+    if total < 1:
+        raise HTTPException(400, "قيمة الطلب غير صحيحة")
+    wallet = db.scalar(select(Wallet).where(Wallet.customer_id == user.id).with_for_update())
+    if not wallet or wallet.balance < total:
+        raise HTTPException(400, "رصيدك غير كافٍ. اشحن محفظتك أولاً.")
+    wallet.balance -= total
     order = Order(customer_id=user.id, service_id=service.id, service_title=service.title,
                   target_link=body.target_link.strip(), quantity=body.quantity,
-                  total_price=total, status="pending_payment")
+                  total_price=total, status="paid")
     db.add(order)
+    db.flush()
+    db.add(WalletTransaction(customer_id=user.id, amount=-total, balance_after=wallet.balance,
+                             kind="order", reference=f"order:{order.id}",
+                             note=f"خصم قيمة الطلب #{order.id}"))
     db.commit()
     db.refresh(order)
-    return {"ok": True, "order": order_json(order)}
+    return {"ok": True, "order": order_json(order), "wallet_balance": wallet.balance}
 
 @app.get("/api/orders")
 def my_orders(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
@@ -257,9 +269,19 @@ def update_order(order_id: int, body: StatusBody, _=Depends(admin_only), db: Ses
     allowed = {"pending_payment", "paid", "processing", "completed", "rejected", "cancelled"}
     if body.status not in allowed:
         raise HTTPException(400, "حالة الطلب غير صحيحة")
-    order = db.get(Order, order_id)
+    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
     if not order:
         raise HTTPException(404, "الطلب غير موجود")
+    if body.status in {"rejected", "cancelled"} and order.status not in {"rejected", "cancelled"}:
+        wallet = db.scalar(select(Wallet).where(Wallet.customer_id == order.customer_id).with_for_update())
+        if wallet and order.total_price > 0:
+            reference = f"refund:order:{order.id}"
+            exists = db.scalar(select(WalletTransaction).where(WalletTransaction.reference == reference))
+            if not exists:
+                wallet.balance += order.total_price
+                db.add(WalletTransaction(customer_id=order.customer_id, amount=order.total_price,
+                    balance_after=wallet.balance, kind="refund", reference=reference,
+                    note=f"استرداد قيمة الطلب #{order.id}"))
     order.status = body.status
     order.admin_note = body.admin_note
     db.commit()
@@ -307,5 +329,139 @@ def remove_service(service_id: int, _=Depends(admin_only), db: Session = Depends
     db.commit()
     return {"ok": True, "removed": True, "archived": False,
             "message": "تمت إزالة الخدمة نهائياً"}
+
+
+# --- HAMO STORE wallet and manual top-ups ---
+class Wallet(Base):
+    __tablename__ = "wallets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), unique=True, index=True)
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class WalletTransaction(Base):
+    __tablename__ = "wallet_transactions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    balance_after: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(30))
+    reference: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class DepositRequest(Base):
+    __tablename__ = "deposit_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    method: Mapped[str] = mapped_column(String(30))
+    sender_reference: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    admin_note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+class DepositBody(BaseModel):
+    amount: int = Field(ge=10, le=100000)
+    method: str = Field(min_length=3, max_length=30)
+    sender_reference: str = Field(default="", max_length=120)
+
+class DepositReviewBody(BaseModel):
+    status: str
+    admin_note: str = Field(default="", max_length=300)
+
+def wallet_for(db: Session, customer_id: int):
+    wallet = db.scalar(select(Wallet).where(Wallet.customer_id == customer_id).with_for_update())
+    if not wallet:
+        wallet = Wallet(customer_id=customer_id, balance=0)
+        db.add(wallet)
+        db.flush()
+    return wallet
+
+def transaction_json(item):
+    return {"id": item.id, "amount": item.amount, "balance_after": item.balance_after,
+            "kind": item.kind, "reference": item.reference, "note": item.note,
+            "created_at": item.created_at.isoformat()}
+
+def deposit_json(item):
+    customer = item.customer_id
+    return {"id": item.id, "customer_id": customer, "amount": item.amount,
+            "method": item.method, "sender_reference": item.sender_reference,
+            "status": item.status, "admin_note": item.admin_note,
+            "created_at": item.created_at.isoformat()}
+
+@app.get("/wallet")
+def wallet_page():
+    return FileResponse(BASE_DIR / "wallet.html")
+
+@app.get("/wallet.js")
+def wallet_script():
+    return FileResponse(BASE_DIR / "wallet.js", media_type="application/javascript")
+
+@app.get("/wallet.css")
+def wallet_stylesheet():
+    return FileResponse(BASE_DIR / "wallet.css", media_type="text/css")
+
+@app.get("/api/wallet")
+def wallet_summary(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
+    wallet = wallet_for(db, user.id)
+    db.commit()
+    txs = db.scalars(select(WalletTransaction).where(
+        WalletTransaction.customer_id == user.id).order_by(WalletTransaction.id.desc()).limit(50)).all()
+    deposits = db.scalars(select(DepositRequest).where(
+        DepositRequest.customer_id == user.id).order_by(DepositRequest.id.desc()).limit(20)).all()
+    return {"balance": wallet.balance, "transactions": [transaction_json(x) for x in txs],
+            "deposits": [deposit_json(x) for x in deposits]}
+
+@app.post("/api/deposits")
+def request_deposit(body: DepositBody, user: Customer = Depends(current_user), db: Session = Depends(get_db)):
+    allowed_methods = {"vodafone_cash", "instapay", "bank_transfer"}
+    if body.method not in allowed_methods:
+        raise HTTPException(400, "طريقة الشحن غير متاحة")
+    item = DepositRequest(customer_id=user.id, amount=body.amount, method=body.method,
+                          sender_reference=body.sender_reference.strip())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"ok": True, "deposit": deposit_json(item),
+            "message": "تم تسجيل طلب الشحن، وسيُضاف الرصيد بعد مراجعة الإدارة."}
+
+@app.get("/api/admin/deposits")
+def admin_deposits(_=Depends(admin_only), db: Session = Depends(get_db)):
+    rows = db.scalars(select(DepositRequest).order_by(DepositRequest.id.desc()).limit(200)).all()
+    return [deposit_json(x) for x in rows]
+
+@app.patch("/api/admin/deposits/{deposit_id}")
+def review_deposit(deposit_id: int, body: DepositReviewBody,
+                   _=Depends(admin_only), db: Session = Depends(get_db)):
+    if body.status not in {"approved", "rejected"}:
+        raise HTTPException(400, "حالة طلب الشحن غير صحيحة")
+    item = db.scalar(select(DepositRequest).where(DepositRequest.id == deposit_id).with_for_update())
+    if not item:
+        raise HTTPException(404, "طلب الشحن غير موجود")
+    if item.status != "pending":
+        raise HTTPException(409, "تمت مراجعة طلب الشحن بالفعل")
+    if body.status == "approved":
+        wallet = wallet_for(db, item.customer_id)
+        wallet.balance += item.amount
+        db.add(WalletTransaction(customer_id=item.customer_id, amount=item.amount,
+            balance_after=wallet.balance, kind="deposit", reference=f"deposit:{item.id}",
+            note=f"شحن رصيد عبر {item.method} — طلب #{item.id}"))
+    item.status = body.status
+    item.admin_note = body.admin_note.strip()
+    db.commit()
+    return {"ok": True, "deposit": deposit_json(item)}
+
+@app.get("/api/admin/customers")
+def admin_customers(_=Depends(admin_only), db: Session = Depends(get_db)):
+    rows = db.scalars(select(Customer).order_by(Customer.id.desc()).limit(500)).all()
+    result = []
+    for customer in rows:
+        wallet = db.scalar(select(Wallet).where(Wallet.customer_id == customer.id))
+        result.append({"id": customer.id, "name": customer.name, "email": customer.email,
+                       "phone": customer.phone, "balance": wallet.balance if wallet else 0})
+    return result
 
 app.mount("/assets", StaticFiles(directory=BASE_DIR), name="assets")
