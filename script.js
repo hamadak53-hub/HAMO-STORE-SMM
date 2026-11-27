@@ -41,3 +41,4 @@ $("orderForm").addEventListener("submit",async e=>{e.preventDefault();const link
 });
 $("menuToggle").addEventListener("click",()=>document.querySelector(".desktop-nav").classList.toggle("show"));document.querySelectorAll(".desktop-nav a").forEach(a=>a.addEventListener("click",()=>document.querySelector(".desktop-nav").classList.remove("show")));
 $("year").textContent=new Date().getFullYear();fetch("/api/me",{credentials:"same-origin"}).then(r=>r.ok?r.json():null).then(user=>{loggedInUser=user;document.querySelectorAll(".order-btn").forEach(btn=>{btn.textContent=loggedInUser?"اطلب الخدمة ←":"سجّل الدخول للطلب ←";});}).catch(()=>{});loadServices();
+document.querySelectorAll(".copy-payment").forEach(button=>button.addEventListener("click",async()=>{const value=button.dataset.copy;try{await navigator.clipboard.writeText(value);button.textContent="تم النسخ ✓";}catch{button.textContent=value;}}));
