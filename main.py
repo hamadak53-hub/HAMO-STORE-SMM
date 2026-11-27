@@ -625,16 +625,17 @@ def provider_services(_=Depends(admin_only)):
     for item in items:
         category = str(item.get("category", ""))
         name = str(item.get("name", ""))
-        if "tiktok" not in (category + " " + name).lower():
+        service_id = str(item.get("service", "")).strip()
+        if not service_id or not name:
             continue
         result.append({
-            "provider_service_id": str(item.get("service", "")),
+            "provider_service_id": service_id,
             "name": name, "category": category, "rate_usd": str(item.get("rate", "0")),
             "min": int(item.get("min", 1)), "max": int(item.get("max", 100000)),
             "refill": bool(item.get("refill", False)), "cancel": bool(item.get("cancel", False)),
             "type": str(item.get("type", "")),
         })
-    return result
+    return resultt
 
 @app.post("/api/admin/provider/import")
 def import_provider_service(body: ProviderImportBody, _=Depends(admin_only),
@@ -650,14 +651,30 @@ def import_provider_service(body: ProviderImportBody, _=Depends(admin_only),
         raise HTTPException(404, "خدمة المورد غير موجودة أو غير متاحة.")
     category = str(remote.get("category", ""))
     title = str(remote.get("name", ""))
-    if "tiktok" not in (category + " " + title).lower():
-        raise HTTPException(400, "يمكن استيراد خدمات TikTok فقط من هذا المسار.")
+    source_text = (" " + category + " " + title + " ").lower()
+    platform_aliases = {
+        "tiktok": ("tiktok", "تيك توك"),
+        "instagram": ("instagram", "insta", "انستجرام", "إنستجرام"),
+        "facebook": ("facebook", "fb", "فيسبوك"),
+        "youtube": ("youtube", "يوتيوب"),
+        "telegram": ("telegram", "تلجرام", "تليجرام"),
+        "snapchat": ("snapchat", "snap", "سناب"),
+        "x": ("twitter", "تويتر", " x "),
+        "linkedin": ("linkedin", "لينكد"),
+        "threads": ("threads", "ثريدز"),
+        "discord": ("discord", "ديسكورد"),
+        "spotify": ("spotify", "سبوتيفاي"),
+        "twitch": ("twitch", "تويتش"),
+        "jaco": ("jaco", "جاكو"),
+    }
+    platform = next((slug for slug, aliases in platform_aliases.items()
+                     if any(alias in source_text for alias in aliases)), "other")
     if db.scalar(select(ProviderServiceMap).where(
         ProviderServiceMap.provider_service_id == body.provider_service_id)):
         raise HTTPException(409, "الخدمة مستوردة بالفعل.")
     minimum = max(1, int(remote.get("min", 1)))
     maximum = max(minimum, int(remote.get("max", 100000)))
-    service = Service(platform="tiktok", title=title[:140],
+    service = Service(platform=platform, title=title[:140],
         description="خدمة موردة عبر PanelFollows؛ السعر بالجنيه المصري لكل 1000.",
         price=body.selling_price_egp, min_quantity=minimum,
         max_quantity=maximum, active=body.active)
