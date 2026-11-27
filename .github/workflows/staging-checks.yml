@@ -1,6 +1,7 @@
 name: HAMO STORE SMM staging checks
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - test/staging
