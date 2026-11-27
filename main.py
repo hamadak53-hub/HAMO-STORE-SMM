@@ -278,27 +278,42 @@ def admin_orders(_=Depends(admin_only), db: Session = Depends(get_db)):
 
 @app.patch("/api/admin/orders/{order_id}")
 def update_order(order_id: int, body: StatusBody, _=Depends(admin_only), db: Session = Depends(get_db)):
-    allowed = {"pending_payment", "paid", "processing", "completed", "rejected", "cancelled"}
-    if body.status not in allowed:
+    transitions = {
+        "pending_payment": {"paid", "rejected", "cancelled"},
+        "paid": {"processing", "rejected", "cancelled"},
+        "processing": {"completed"},
+        "completed": set(),
+        "rejected": set(),
+        "cancelled": set(),
+    }
+    if body.status not in transitions:
         raise HTTPException(400, "حالة الطلب غير صحيحة")
     order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
     if not order:
         raise HTTPException(404, "الطلب غير موجود")
-    if body.status in {"rejected", "cancelled"} and order.status not in {"rejected", "cancelled"}:
+    if body.status != order.status and body.status not in transitions.get(order.status, set()):
+        raise HTTPException(409, "لا يمكن تغيير حالة الطلب من الحالة الحالية.")
+    if body.status in {"rejected", "cancelled"} and order.status in {"pending_payment", "paid"}:
         charged = db.scalar(select(WalletTransaction).where(
             WalletTransaction.reference == f"order:{order.id}"))
-        wallet = db.scalar(select(Wallet).where(Wallet.customer_id == order.customer_id).with_for_update())
+        wallet = db.scalar(select(Wallet).where(
+            Wallet.customer_id == order.customer_id).with_for_update())
         if charged and wallet and order.total_price > 0:
             reference = f"refund:order:{order.id}"
-            exists = db.scalar(select(WalletTransaction).where(WalletTransaction.reference == reference))
+            exists = db.scalar(select(WalletTransaction).where(
+                WalletTransaction.reference == reference))
             if not exists:
                 wallet.balance += order.total_price
                 db.add(WalletTransaction(customer_id=order.customer_id, amount=order.total_price,
                     balance_after=wallet.balance, kind="refund", reference=reference,
                     note=f"استرداد قيمة الطلب #{order.id}"))
     order.status = body.status
-    order.admin_note = body.admin_note
-    db.commit()
+    order.admin_note = body.admin_note.strip()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {"ok": True, "order": order_json(order)}
 
 @app.get("/api/admin/services")
