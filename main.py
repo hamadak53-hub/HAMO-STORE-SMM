@@ -163,6 +163,15 @@ def login_page(request: Request):
         return RedirectResponse("/", status_code=303)
     return FileResponse(BASE_DIR / "login.html")
 
+@app.get("/logout")
+def logout(request: Request):
+    # Clear both the customer/admin auth cookie and OAuth session cookie.
+    request.session.clear()
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(COOKIE_NAME, path="/")
+    response.delete_cookie("session", path="/")
+    return response
+
 @app.get("/admin")
 def admin_page():
     return FileResponse(BASE_DIR / "admin.html")
