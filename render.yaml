@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: hamo-store-smm
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hamo-store-smm-db
+          property: connectionString
+      - key: COOKIE_SECURE
+        value: "true"
+databases:
+  - name: hamo-store-smm-db
+    plan: free
+    databaseName: hamo_smm
+    user: hamo_smm_user
