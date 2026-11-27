@@ -676,9 +676,10 @@ def sync_provider_order(local_order_id: int, _=Depends(admin_only), db: Session 
     remote_status = str(data.get("status", "Unknown"))
     mapping.provider_status = remote_status
     normalized = remote_status.lower()
-    if normalized == "completed":
+    terminal_statuses = {"completed", "cancelled", "rejected"}
+    if normalized == "completed" and order.status not in terminal_statuses:
         order.status = "completed"
-    elif normalized in {"pending", "in progress"}:
+    elif normalized in {"pending", "in progress"} and order.status not in terminal_statuses:
         order.status = "processing"
     elif normalized in {"canceled", "cancelled"}:
         if order.status not in {"cancelled", "rejected", "completed"}:
