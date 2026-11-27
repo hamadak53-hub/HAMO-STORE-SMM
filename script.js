@@ -58,17 +58,28 @@ document.getElementById("modalClose").addEventListener("click", closeOrder);
 modal.addEventListener("click", (event) => { if (event.target === modal) closeOrder(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeOrder(); });
 
-document.getElementById("orderForm").addEventListener("submit", (event) => {
+document.getElementById("orderForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const link = document.getElementById("accountLink").value.trim();
   const quantity = Number(document.getElementById("quantity").value);
-  if (!link || !Number.isInteger(quantity) || quantity < 1) {
-    feedback.textContent = "راجع الرابط والكمية وحاول تاني.";
-    return;
-  }
-  feedback.textContent = "تمت معاينة بيانات الطلب بنجاح. إرسال الطلب الفعلي هيتاح بعد ربط نظام الطلبات والمورد.";
+  const email = document.getElementById("customerEmail").value.trim();
+  const password = document.getElementById("customerPassword").value;
+  const name = document.getElementById("customerName").value.trim();
+  const phone = document.getElementById("customerPhone").value.trim();
+  const serviceId = Number(window.selectedServiceId || 0);
+  if (!serviceId || !link || !Number.isInteger(quantity) || quantity < 1) { feedback.textContent = "اختار خدمة وراجع الرابط والكمية."; return; }
+  feedback.textContent = "جاري إرسال الطلب...";
+  try {
+    const me = await fetch("/api/me", {credentials:"same-origin"});
+    if (me.status === 401) {
+      const reg = await fetch("/api/register", {method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,email,phone,password})});
+      const regData = await reg.json(); if (!reg.ok) throw new Error(regData.detail || "تعذر إنشاء الحساب");
+    } else if (!me.ok) { throw new Error("تعذر التحقق من الحساب"); }
+    const res = await fetch("/api/orders", {method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({service_id:serviceId,target_link:link,quantity})});
+    const data = await res.json(); if (!res.ok) throw new Error(data.detail || "تعذر إرسال الطلب");
+    feedback.textContent = "تم إنشاء طلبك رقم #" + data.order.id + ". احتفظ بالرقم لمتابعته.";
+  } catch (err) { feedback.textContent = err.message; }
 });
-
 document.getElementById("menuToggle").addEventListener("click", () => {
   document.querySelector(".desktop-nav").classList.toggle("show");
 });
