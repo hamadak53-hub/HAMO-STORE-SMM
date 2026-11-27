@@ -60,6 +60,7 @@ class Order(Base):
     admin_note: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="HAMO STORE API")
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "change-this-secret-before-production"), same_site="lax", https_only=COOKIE_SECURE)
@@ -197,7 +198,7 @@ async def google_login(request: Request):
         raise HTTPException(503, "تسجيل Google يحتاج ضبط GOOGLE_CLIENT_ID و GOOGLE_CLIENT_SECRET في إعدادات Render")
     request.session["google_mode"] = "register" if request.query_params.get("mode") == "register" else "login"
     redirect_uri = request.url_for("google_callback")
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    return await oauth.google.authorize_redirect(request, redirect_uri, prompt="select_account")
 
 @app.get("/auth/google/callback", name="google_callback")
 async def google_callback(request: Request, db: Session = Depends(get_db)):
