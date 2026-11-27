@@ -125,3 +125,78 @@ footer{max-width:100%;padding-top:30px;padding-bottom:30px;background:#080e19}
  .floating-contact a{width:49px;height:49px;min-width:49px;min-height:49px}
  .floating-contact a svg{width:25px;height:25px;flex-basis:25px}
 }
+
+
+/* Mobile viewport and overflow correction */
+html, body {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+body { overflow-x: clip; }
+main, header, footer, section, nav, .site-header, .guest-notice,
+.hero, .trust-strip, .section-wrap, .bottom-banner {
+  min-width: 0;
+  max-width: 100%;
+}
+.hero > *, .site-header > *, .guest-notice > * { min-width: 0; }
+img, svg, video, canvas { max-width: 100%; }
+@media (max-width: 760px) {
+  .site-header {
+    width: 100%;
+    padding-inline: 12px;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+  }
+  .brand { flex: 0 1 auto; min-width: 0; gap: 7px; }
+  .brand-name { font-size: 14px; }
+  .brand-mark { width: 38px; height: 38px; flex: 0 0 38px; }
+  .header-actions { flex: 0 1 auto; min-width: 0; margin: 0; gap: 5px; }
+  .header-login, .header-register { padding-inline: 9px; white-space: nowrap; }
+  .menu-toggle { flex: 0 0 auto; padding: 5px; }
+  .guest-notice {
+    width: auto;
+    margin-inline: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
+  }
+  .guest-notice > span:nth-child(2) { flex: 1 1 180px; }
+  .guest-notice a { margin-inline-start: 38px; }
+  .hero {
+    width: 100%;
+    padding-inline: 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px;
+    overflow: hidden;
+  }
+  .hero-copy, .hero-art { width: 100%; min-width: 0; }
+  .hero h1 { overflow-wrap: anywhere; }
+  .hero-art {
+    max-width: 100%;
+    overflow: hidden;
+    transform: none;
+  }
+  .orbit-a { width: min(410px, 90vw); }
+  .orbit-b { width: min(330px, 78vw); height: min(330px, 78vw); }
+  .chip-top { right: 0; }
+  .chip-bottom { left: 0; }
+  .trust-strip, .section-wrap, .bottom-banner {
+    width: auto;
+    margin-inline: 12px;
+  }
+  .section-wrap { padding-inline: 0; }
+  .platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .service-grid, .steps-grid { grid-template-columns: minmax(0, 1fr); }
+  .service-card, .platform-card { min-width: 0; }
+  .bottom-banner { flex-wrap: wrap; }
+  footer { width: 100%; min-width: 0; }
+}
+@media (max-width: 390px) {
+  .header-login { display: none; }
+  .brand-name { font-size: 12px; }
+  .header-register { font-size: 9px; padding-inline: 7px; }
+  .hero h1 { font-size: clamp(32px, 10vw, 41px); }
+}
