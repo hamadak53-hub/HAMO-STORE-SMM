@@ -152,6 +152,22 @@ def home():
 def admin_page():
     return FileResponse(BASE_DIR / "admin.html")
 
+@app.get("/style.css")
+def stylesheet():
+    return FileResponse(BASE_DIR / "style.css", media_type="text/css")
+
+@app.get("/script.js")
+def frontend_script():
+    return FileResponse(BASE_DIR / "script.js", media_type="application/javascript")
+
+@app.get("/admin.js")
+def admin_script():
+    return FileResponse(BASE_DIR / "admin.js", media_type="application/javascript")
+
+@app.get("/admin.css")
+def admin_stylesheet():
+    return FileResponse(BASE_DIR / "admin.css", media_type="text/css")
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "HAMO STORE SMM"}
@@ -209,8 +225,6 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
         raise HTTPException(404, "الخدمة غير متاحة")
     if body.quantity < service.min_quantity or body.quantity > service.max_quantity:
         raise HTTPException(400, f"الكمية يجب أن تكون بين {service.min_quantity} و{service.max_quantity}")
-    if body.price if False else False:
-        pass
     total = (service.price * body.quantity + 999) // 1000
     order = Order(customer_id=user.id, service_id=service.id, service_title=service.title,
                   target_link=body.target_link.strip(), quantity=body.quantity,
@@ -229,7 +243,7 @@ def my_orders(user: Customer = Depends(current_user), db: Session = Depends(get_
 def admin_summary(_=Depends(admin_only), db: Session = Depends(get_db)):
     return {"customers": db.query(Customer).count(), "orders": db.query(Order).count(),
             "pending": db.query(Order).filter(Order.status == "pending_payment").count(),
-            "revenue": db.query(Order).filter(Order.status == "completed").with_entities(Order.total_price).all()}
+            "revenue": sum(row[0] for row in db.query(Order.total_price).filter(Order.status == "completed").all())}
 
 @app.get("/api/admin/orders")
 def admin_orders(_=Depends(admin_only), db: Session = Depends(get_db)):
