@@ -152,9 +152,12 @@ def order_json(item):
             "created_at": item.created_at.isoformat()}
 
 @app.get("/")
-def home():
-    # Public storefront: visitors can browse without creating an account.
-    return FileResponse(BASE_DIR / "index.html")
+def home(request: Request):
+    # New visitors start at registration; signed-in customers enter the storefront.
+    data = session_data(request)
+    if data and data.get("role") == "customer":
+        return FileResponse(BASE_DIR / "index.html")
+    return RedirectResponse("/login?mode=register", status_code=303)
 
 @app.get("/login")
 def login_page(request: Request):
