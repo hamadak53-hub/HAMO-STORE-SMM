@@ -200,3 +200,23 @@ img, svg, video, canvas { max-width: 100%; }
   .header-register { font-size: 9px; padding-inline: 7px; }
   .hero h1 { font-size: clamp(32px, 10vw, 41px); }
 }
+
+
+/* Keep the customer login action visible on narrow mobile screens */
+@media (max-width: 390px) {
+  .header-login {
+    display: inline-flex !important;
+    min-height: 34px;
+    padding-inline: 8px;
+    font-size: 9px;
+  }
+  .header-register {
+    min-height: 34px;
+    padding-inline: 8px;
+    font-size: 9px;
+  }
+  .header-actions { gap: 5px; }
+  .brand-name { font-size: 11px; }
+  .brand { gap: 6px; }
+  .brand-mark { width: 34px; height: 34px; flex-basis: 34px; }
+}
