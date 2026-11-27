@@ -1,38 +1,30 @@
-"""Generic SMM Panel API client.
-
-Credentials are supplied at runtime and must never be committed to Git.
-This adapter follows the common SMM Panel API v2 form protocol:
-key=<API key>, action=services|add|status|refill|cancel.
-Provider-specific differences should be handled by a dedicated adapter before
-enabling automatic order placement.
-"""
+"""PanelFollows v2 reseller API client. Keep API keys server-side only."""
 from __future__ import annotations
-
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+PANELFOLLOWS_API_URL = "https://panelfollows.com/api/v2"
 
 class ProviderAPIError(RuntimeError):
     pass
 
-
-class SMMPanelClient:
-    def __init__(self, api_url: str, api_key: str, timeout: int = 20):
-        self.api_url = api_url.strip()
-        self.api_key = api_key
+class PanelFollowsClient:
+    def __init__(self, api_key: str, timeout: int = 20):
+        if not api_key or not api_key.strip():
+            raise ValueError("مفتاح PanelFollows غير مضبوط")
+        self.api_key = api_key.strip()
         self.timeout = timeout
-        if not self.api_url.startswith(("https://", "http://")):
-            raise ValueError("عنوان API غير صحيح")
 
-    def _post(self, payload: dict[str, Any]) -> Any:
-        data = urlencode({"key": self.api_key, **payload}).encode("utf-8")
+    def _post(self, action: str, **params: Any) -> Any:
+        payload = {"key": self.api_key, "action": action, **params}
         request = Request(
-            self.api_url,
-            data=data,
-            headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "HAMO-STORE-SMM/1.0"},
+            PANELFOLLOWS_API_URL,
+            data=urlencode(payload).encode("utf-8"),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Accept": "application/json", "User-Agent": "HAMO-STORE-SMM/1.0"},
             method="POST",
         )
         try:
@@ -40,36 +32,46 @@ class SMMPanelClient:
                 raw = response.read().decode("utf-8", errors="replace")
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:300]
-            raise ProviderAPIError(f"HTTP {exc.code}: {detail}") from exc
+            raise ProviderAPIError(f"PanelFollows HTTP {exc.code}: {detail}") from exc
         except (URLError, TimeoutError) as exc:
-            raise ProviderAPIError(f"تعذر الاتصال بالمورد: {exc}") from exc
+            raise ProviderAPIError("تعذر الاتصال بـ PanelFollows") from exc
         try:
-            result = json.loads(raw)
+            data = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ProviderAPIError("المورد أعاد استجابة غير مفهومة") from exc
-        if isinstance(result, dict) and result.get("error"):
-            raise ProviderAPIError(str(result["error"]))
-        return result
+            raise ProviderAPIError("استجابة PanelFollows غير مفهومة") from exc
+        if isinstance(data, dict) and data.get("error"):
+            raise ProviderAPIError(str(data["error"]))
+        return data
 
-    def get_services(self) -> list[dict[str, Any]]:
-        result = self._post({"action": "services"})
-        if not isinstance(result, list):
-            raise ProviderAPIError("استجابة قائمة الخدمات ليست بالشكل المتوقع")
-        return result
+    def balance(self) -> dict[str, Any]:
+        data = self._post("balance")
+        if not isinstance(data, dict) or "balance" not in data:
+            raise ProviderAPIError("استجابة الرصيد غير صحيحة")
+        return data
+
+    def services(self) -> list[dict[str, Any]]:
+        data = self._post("services")
+        if not isinstance(data, list):
+            raise ProviderAPIError("استجابة قائمة الخدمات غير صحيحة")
+        return data
 
     def add_order(self, service_id: str, link: str, quantity: int) -> dict[str, Any]:
-        result = self._post({
-            "action": "add",
-            "service": str(service_id),
-            "link": link,
-            "quantity": int(quantity),
-        })
-        if not isinstance(result, dict) or not result.get("order"):
-            raise ProviderAPIError("لم يرجع المورد رقم طلب صالحًا")
-        return result
+        data = self._post("add", service=str(service_id), link=link, quantity=int(quantity))
+        if not isinstance(data, dict) or not data.get("order"):
+            raise ProviderAPIError("المورد لم يرجع رقم طلب صالحًا")
+        return data
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
-        result = self._post({"action": "status", "order": str(order_id)})
-        if not isinstance(result, dict):
+    def status(self, order_id: str) -> dict[str, Any]:
+        data = self._post("status", order=str(order_id))
+        if not isinstance(data, dict):
             raise ProviderAPIError("استجابة حالة الطلب غير صحيحة")
-        return result
+        return data
+
+    def cancel(self, order_ids: list[str]) -> Any:
+        return self._post("cancel", orders=",".join(map(str, order_ids)))
+
+    def refill(self, order_id: str) -> Any:
+        return self._post("refill", order=str(order_id))
+
+    def refill_status(self, refill_id: str) -> Any:
+        return self._post("refill_status", refill=str(refill_id))
