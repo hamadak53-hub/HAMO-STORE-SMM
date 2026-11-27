@@ -273,8 +273,10 @@ def update_order(order_id: int, body: StatusBody, _=Depends(admin_only), db: Ses
     if not order:
         raise HTTPException(404, "الطلب غير موجود")
     if body.status in {"rejected", "cancelled"} and order.status not in {"rejected", "cancelled"}:
+        charged = db.scalar(select(WalletTransaction).where(
+            WalletTransaction.reference == f"order:{order.id}"))
         wallet = db.scalar(select(Wallet).where(Wallet.customer_id == order.customer_id).with_for_update())
-        if wallet and order.total_price > 0:
+        if charged and wallet and order.total_price > 0:
             reference = f"refund:order:{order.id}"
             exists = db.scalar(select(WalletTransaction).where(WalletTransaction.reference == reference))
             if not exists:
