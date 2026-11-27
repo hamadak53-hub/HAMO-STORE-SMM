@@ -7,7 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, EmailStr
-from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Text, Boolean, select
+from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Text, Boolean, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from passlib.context import CryptContext
@@ -232,10 +232,17 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     total = (service.price * body.quantity + 999) // 1000
     if total < 1:
         raise HTTPException(400, "قيمة الطلب غير صحيحة")
-    wallet = wallet_for(db, user.id)
-    if wallet.balance < total:
+    wallet_for(db, user.id)
+    # Atomic conditional debit prevents concurrent requests from spending the same balance.
+    debit = db.execute(
+        update(Wallet)
+        .where(Wallet.customer_id == user.id, Wallet.balance >= total)
+        .values(balance=Wallet.balance - total)
+    )
+    if debit.rowcount != 1:
+        db.rollback()
         raise HTTPException(400, "رصيدك غير كافٍ. اشحن محفظتك أولاً.")
-    wallet.balance -= total
+    wallet = db.scalar(select(Wallet).where(Wallet.customer_id == user.id))
     order = Order(customer_id=user.id, service_id=service.id, service_title=service.title,
                   target_link=body.target_link.strip(), quantity=body.quantity,
                   total_price=total, status="paid")
@@ -244,8 +251,13 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     db.add(WalletTransaction(customer_id=user.id, amount=-total, balance_after=wallet.balance,
                              kind="order", reference=f"order:{order.id}",
                              note=f"خصم قيمة الطلب #{order.id}"))
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(order)
+    db.refresh(wallet)
     return {"ok": True, "order": order_json(order), "wallet_balance": wallet.balance}
 
 @app.get("/api/orders")
@@ -446,17 +458,33 @@ def review_deposit(deposit_id: int, body: DepositReviewBody,
     item = db.scalar(select(DepositRequest).where(DepositRequest.id == deposit_id).with_for_update())
     if not item:
         raise HTTPException(404, "طلب الشحن غير موجود")
-    if item.status != "pending":
+    # Claim the pending request atomically; only one concurrent admin action can win.
+    claimed = db.execute(
+        update(DepositRequest)
+        .where(DepositRequest.id == item.id, DepositRequest.status == "pending")
+        .values(status=body.status, admin_note=body.admin_note.strip())
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
         raise HTTPException(409, "تمت مراجعة طلب الشحن بالفعل")
     if body.status == "approved":
         wallet = wallet_for(db, item.customer_id)
-        wallet.balance += item.amount
+        db.execute(
+            update(Wallet)
+            .where(Wallet.customer_id == item.customer_id)
+            .values(balance=Wallet.balance + item.amount)
+        )
+        db.flush()
+        db.refresh(wallet)
         db.add(WalletTransaction(customer_id=item.customer_id, amount=item.amount,
             balance_after=wallet.balance, kind="deposit", reference=f"deposit:{item.id}",
             note=f"شحن رصيد عبر {item.method} — طلب #{item.id}"))
-    item.status = body.status
-    item.admin_note = body.admin_note.strip()
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(item)
     return {"ok": True, "deposit": deposit_json(item, db)}
 
 @app.get("/api/admin/customers")
