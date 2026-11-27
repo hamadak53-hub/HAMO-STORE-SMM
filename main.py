@@ -15,7 +15,9 @@ from passlib.context import CryptContext
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./hamo_smm.db")
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -262,6 +264,11 @@ def update_order(order_id: int, body: StatusBody, _=Depends(admin_only), db: Ses
     order.admin_note = body.admin_note
     db.commit()
     return {"ok": True, "order": order_json(order)}
+
+@app.get("/api/admin/services")
+def admin_services(_=Depends(admin_only), db: Session = Depends(get_db)):
+    items = db.scalars(select(Service).order_by(Service.platform, Service.id)).all()
+    return [service_json(item) for item in items]
 
 @app.post("/api/admin/services")
 def add_service(body: ServiceBody, _=Depends(admin_only), db: Session = Depends(get_db)):
