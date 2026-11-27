@@ -1,4 +1,4 @@
-"""PanelFollows v2 reseller API client. Keep API keys server-side only."""
+"""IGCPANEL v2 reseller API client. Keep API keys server-side only."""
 from __future__ import annotations
 import json
 from typing import Any
@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-PANELFOLLOWS_API_URL = "https://panelfollows.com/api/v2"
+PANELFOLLOWS_API_URL = "https://igcpanel.com/api/v2"
 
 class ProviderAPIError(RuntimeError):
     pass
