@@ -21,7 +21,7 @@ function renderOrders(orders) {
   $("ordersList").innerHTML = orders.length ? orders.map(o => `<article class="order-row"><div class="order-top"><b>طلب #${o.id} · ${o.service_title}</b><span>${o.total_price} ج.م</span></div><p>العميل رقم ${o.customer_id} · الكمية: ${o.quantity}</p><p><a href="${escapeAttr(o.target_link)}" target="_blank" rel="noopener">فتح الرابط</a></p><p>الحالة: ${labels[o.status] || o.status}</p><div class="order-actions"><select id="status-${o.id}">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${o.status===k?"selected":""}>${v}</option>`).join("")}</select><button data-save-order="${o.id}">حفظ الحالة</button></div></article>`).join("") : '<p class="muted">لسه مفيش طلبات.</p>';
 }
 function renderServices(services) {
-  $("serviceList").innerHTML = services.length ? services.map(s => `<div class="service-row"><span><b>${escapeHtml(s.title)}</b><br><small>${s.price} جنيه / 1000 · ${s.active ? "نشطة" : "مخفية"}</small></span><button data-hide-service="${s.id}">إخفاء</button></div>`).join("") : '<p class="muted">أضف أول خدمة من النموذج.</p>';
+  $("serviceList").innerHTML = services.length ? services.map(s => `<div class="service-row"><span><b>${escapeHtml(s.title)}</b><br><small>${s.price} جنيه / 1000 · ${s.active ? "نشطة" : "مزالة"}</small></span><button data-remove-service="${s.id}">إزالة</button></div>`).join("") : '<p class="muted">أضف أول خدمة من النموذج.</p>';
 }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function escapeAttr(value) { return escapeHtml(value); }
@@ -40,10 +40,10 @@ $("serviceForm").addEventListener("submit",async e=>{
 });
 document.addEventListener("click",async e=>{
   const save=e.target.closest("[data-save-order]");
-  const hide=e.target.closest("[data-hide-service]");
+  const remove=e.target.closest("[data-remove-service]");
   try{
     if(save){const id=save.dataset.saveOrder;const status=$("status-"+id).value;await api("/api/admin/orders/"+id,{method:"PATCH",body:JSON.stringify({status,admin_note:""})});await loadDashboard();}
-    if(hide){await api("/api/admin/services/"+hide.dataset.hideService,{method:"DELETE"});await loadDashboard();}
+    if(remove){if(!confirm("متأكد إنك عايز تزيل الخدمة؟ لو عليها طلبات سابقة هنحتفظ بسجلها ونمنع طلبها من المتجر."))return;const result=await api("/api/admin/services/"+remove.dataset.removeService,{method:"DELETE"});alert(result.message);await loadDashboard();}
   }catch(err){alert(err.message);}
 });
 api("/api/admin/summary").then(()=>{$("loginCard").hidden=true;$("dashboard").hidden=false;return loadDashboard();}).catch(()=>{});
