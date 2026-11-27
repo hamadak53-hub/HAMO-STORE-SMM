@@ -64,7 +64,7 @@ class Order(Base):
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="HAMO STORE API")
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "change-this-secret-before-production"), same_site="lax", https_only=COOKIE_SECURE)
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "change-this-secret-before-production"), session_cookie="hamo_oauth_session", max_age=60 * 60 * 24, same_site="lax", https_only=True, domain=".hamo-store.com")
 oauth = OAuth()
 oauth.register(name="google", client_id=os.getenv("GOOGLE_CLIENT_ID"), client_secret=os.getenv("GOOGLE_CLIENT_SECRET"), server_metadata_url="https://accounts.google.com/.well-known/openid-configuration", client_kwargs={"scope": "openid email profile"})
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
