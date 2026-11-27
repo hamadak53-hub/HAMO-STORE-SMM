@@ -21,7 +21,15 @@ function openOrder(btn){selectedServiceId=Number(btn.dataset.id);serviceInput.va
   $("customerLogin").hidden=!!loggedInUser;$("orderForm").querySelector(".submit-btn").textContent=loggedInUser?"تأكيد الطلب ←":"إنشاء الحساب وإرسال الطلب ←";
   modal.classList.add("open");modal.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";$("accountLink").focus();}
 function closeOrder(){modal.classList.remove("open");modal.setAttribute("aria-hidden","true");document.body.style.overflow="";}
-serviceGrid.addEventListener("click",e=>{const btn=e.target.closest("button[data-id]");if(btn)openOrder(btn);});
+serviceGrid.addEventListener("click",async e=>{
+  const btn=e.target.closest("button[data-id]");if(!btn)return;
+  try {
+    const res=await fetch("/api/me",{credentials:"same-origin"});
+    if(!res.ok){window.location.href="/login?next=/";return;}
+    loggedInUser=await res.json();
+    openOrder(btn);
+  } catch { window.location.href="/login?next=/"; }
+});
 $("modalClose").addEventListener("click",closeOrder);modal.addEventListener("click",e=>{if(e.target===modal)closeOrder();});document.addEventListener("keydown",e=>{if(e.key==="Escape")closeOrder();});
 $("customerLogin").addEventListener("click",async()=>{const email=prompt("اكتب البريد الإلكتروني");if(!email)return;const password=prompt("اكتب كلمة المرور");if(!password)return;try{const res=await fetch("/api/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});const data=await res.json();if(!res.ok)throw new Error(data.detail||"تعذر تسجيل الدخول");$("customerName").required=false;$("customerPassword").required=false;$("customerName").value=data.user.name;$("customerEmail").value=data.user.email;$("customerPassword").value="";feedback.textContent="تم تسجيل الدخول. كمل طلبك."; }catch(err){feedback.textContent=err.message;}});
 $("orderForm").addEventListener("submit",async e=>{e.preventDefault();const link=$("accountLink").value.trim(),quantity=Number($("quantity").value),email=$("customerEmail").value.trim(),password=$("customerPassword").value,name=$("customerName").value.trim(),phone=$("customerPhone").value.trim();
