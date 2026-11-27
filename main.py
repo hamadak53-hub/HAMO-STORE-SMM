@@ -258,6 +258,45 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
         raise
     db.refresh(order)
     db.refresh(wallet)
+
+    # If this service is mapped to PanelFollows, submit it server-side.
+    mapping = db.scalar(select(ProviderServiceMap).where(
+        ProviderServiceMap.local_service_id == service.id))
+    if mapping:
+        api_key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
+        if not api_key:
+            raise HTTPException(503, "خدمة المورد غير مفعّلة حاليًا. تواصل مع الإدارة.")
+        from provider_client import PanelFollowsClient, ProviderAPIError
+        try:
+            provider_result = PanelFollowsClient(api_key).add_order(
+                mapping.provider_service_id, body.target_link.strip(), body.quantity)
+            provider_order_id = str(provider_result["order"])
+            db.add(ProviderOrderMap(local_order_id=order.id,
+                                    provider_order_id=provider_order_id,
+                                    provider_status="Pending"))
+            order.status = "processing"
+            db.commit()
+            db.refresh(order)
+        except Exception as exc:
+            db.rollback()
+            # Provider submission failed: refund the already-debited customer wallet.
+            wallet = db.scalar(select(Wallet).where(
+                Wallet.customer_id == user.id).with_for_update())
+            refund_ref = f"refund:provider-submit:{order.id}"
+            exists = db.scalar(select(WalletTransaction).where(
+                WalletTransaction.reference == refund_ref))
+            if wallet and not exists:
+                wallet.balance += total
+                db.add(WalletTransaction(customer_id=user.id, amount=total,
+                    balance_after=wallet.balance, kind="refund", reference=refund_ref,
+                    note=f"استرداد تعذر تنفيذ الطلب #{order.id}"))
+            order = db.get(Order, order.id)
+            if order:
+                order.status = "rejected"
+                order.admin_note = "تعذر إرسال الطلب للمورد؛ تم رد المبلغ للمحفظة."
+            db.commit()
+            raise HTTPException(502, "المورد لم يقبل الطلب. تم رد المبلغ إلى محفظتك.") from exc
+
     return {"ok": True, "order": order_json(order), "wallet_balance": wallet.balance}
 
 @app.get("/api/orders")
@@ -513,3 +552,158 @@ def admin_customers(_=Depends(admin_only), db: Session = Depends(get_db)):
     return result
 
 app.mount("/assets", StaticFiles(directory=BASE_DIR), name="assets")
+
+
+# --- PanelFollows provider integration ---
+class ProviderServiceMap(Base):
+    __tablename__ = "provider_service_maps"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    local_service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), unique=True, index=True)
+    provider_service_id: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    provider_rate_usd: Mapped[str] = mapped_column(String(30), default="0")
+    provider_min: Mapped[int] = mapped_column(Integer, default=1)
+    provider_max: Mapped[int] = mapped_column(Integer, default=100000)
+
+class ProviderOrderMap(Base):
+    __tablename__ = "provider_order_maps"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    local_order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), unique=True, index=True)
+    provider_order_id: Mapped[str] = mapped_column(String(60), unique=True, index=True)
+    provider_status: Mapped[str] = mapped_column(String(40), default="Pending")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+class ProviderImportBody(BaseModel):
+    provider_service_id: str = Field(min_length=1, max_length=40)
+    selling_price_egp: int = Field(ge=1)
+    active: bool = False
+
+def panel_follows_client():
+    from provider_client import PanelFollowsClient
+    key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(503, "مفتاح PanelFollows غير مضبوط في إعدادات الاستضافة")
+    return PanelFollowsClient(key)
+
+@app.get("/api/admin/provider/status")
+def provider_status(_=Depends(admin_only)):
+    try:
+        data = panel_follows_client().balance()
+        return {"connected": True, "balance": data.get("balance"), "currency": data.get("currency", "USD")}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر الاتصال بـ PanelFollows؛ راجع المفتاح والرصيد.")
+
+@app.get("/api/admin/provider/services")
+def provider_services(_=Depends(admin_only)):
+    try:
+        items = panel_follows_client().services()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر تحميل قائمة خدمات المورد.")
+    result = []
+    for item in items:
+        category = str(item.get("category", ""))
+        name = str(item.get("name", ""))
+        if "tiktok" not in (category + " " + name).lower():
+            continue
+        result.append({
+            "provider_service_id": str(item.get("service", "")),
+            "name": name, "category": category, "rate_usd": str(item.get("rate", "0")),
+            "min": int(item.get("min", 1)), "max": int(item.get("max", 100000)),
+            "refill": bool(item.get("refill", False)), "cancel": bool(item.get("cancel", False)),
+            "type": str(item.get("type", "")),
+        })
+    return result
+
+@app.post("/api/admin/provider/import")
+def import_provider_service(body: ProviderImportBody, _=Depends(admin_only),
+                            db: Session = Depends(get_db)):
+    try:
+        items = panel_follows_client().services()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر تحميل قائمة خدمات المورد.")
+    remote = next((x for x in items if str(x.get("service")) == body.provider_service_id), None)
+    if not remote:
+        raise HTTPException(404, "خدمة المورد غير موجودة أو غير متاحة.")
+    category = str(remote.get("category", ""))
+    title = str(remote.get("name", ""))
+    if "tiktok" not in (category + " " + title).lower():
+        raise HTTPException(400, "يمكن استيراد خدمات TikTok فقط من هذا المسار.")
+    if db.scalar(select(ProviderServiceMap).where(
+        ProviderServiceMap.provider_service_id == body.provider_service_id)):
+        raise HTTPException(409, "الخدمة مستوردة بالفعل.")
+    minimum = max(1, int(remote.get("min", 1)))
+    maximum = max(minimum, int(remote.get("max", 100000)))
+    service = Service(platform="tiktok", title=title[:140],
+        description="خدمة موردة عبر PanelFollows؛ السعر بالجنيه المصري لكل 1000.",
+        price=body.selling_price_egp, min_quantity=minimum,
+        max_quantity=maximum, active=body.active)
+    db.add(service)
+    db.flush()
+    db.add(ProviderServiceMap(local_service_id=service.id,
+        provider_service_id=body.provider_service_id,
+        provider_rate_usd=str(remote.get("rate", "0")),
+        provider_min=minimum, provider_max=maximum))
+    db.commit()
+    db.refresh(service)
+    return {"ok": True, "service": service_json(service)}
+
+@app.get("/api/admin/provider/orders")
+def provider_orders(_=Depends(admin_only), db: Session = Depends(get_db)):
+    rows = db.scalars(select(ProviderOrderMap).order_by(ProviderOrderMap.id.desc()).limit(100)).all()
+    return [{"local_order_id": x.local_order_id, "provider_order_id": x.provider_order_id,
+             "provider_status": x.provider_status} for x in rows]
+
+@app.post("/api/admin/provider/orders/{local_order_id}/sync")
+def sync_provider_order(local_order_id: int, _=Depends(admin_only), db: Session = Depends(get_db)):
+    mapping = db.scalar(select(ProviderOrderMap).where(
+        ProviderOrderMap.local_order_id == local_order_id))
+    order = db.get(Order, local_order_id)
+    if not mapping or not order:
+        raise HTTPException(404, "طلب المورد غير موجود.")
+    try:
+        data = panel_follows_client().status(mapping.provider_order_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر جلب حالة الطلب من المورد.")
+    remote_status = str(data.get("status", "Unknown"))
+    mapping.provider_status = remote_status
+    normalized = remote_status.lower()
+    if normalized == "completed":
+        order.status = "completed"
+    elif normalized in {"pending", "in progress"}:
+        order.status = "processing"
+    elif normalized in {"canceled", "cancelled"}:
+        if order.status not in {"cancelled", "rejected", "completed"}:
+            wallet = db.scalar(select(Wallet).where(
+                Wallet.customer_id == order.customer_id).with_for_update())
+            refund_ref = f"refund:provider-cancel:{order.id}"
+            if wallet and not db.scalar(select(WalletTransaction).where(
+                    WalletTransaction.reference == refund_ref)):
+                wallet.balance += order.total_price
+                db.add(WalletTransaction(customer_id=order.customer_id,
+                    amount=order.total_price, balance_after=wallet.balance,
+                    kind="refund", reference=refund_ref,
+                    note=f"استرداد إلغاء المورد للطلب #{order.id}"))
+            order.status = "cancelled"
+            order.admin_note = "ألغى المورد الطلب وتم رد المبلغ للمحفظة."
+    elif normalized == "partial":
+        order.admin_note = f"المورد أبلغ أن الطلب جزئي؛ المتبقي: {data.get('remains', 'غير معروف')}"
+    db.commit()
+    return {"ok": True, "order": order_json(order),
+            "provider_status": remote_status, "provider_charge_usd": data.get("charge"),
+            "provider_remains": data.get("remains")}
+
+def panel_follows_client():
+    from provider_client import PanelFollowsClient
+    key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(503, "مفتاح PanelFollows غير مضبوط في إعدادات الاستضافة")
+    return PanelFollowsClient(key)
