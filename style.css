@@ -13,3 +13,14 @@
 .contact-whatsapp{background:#55df9a}
 .contact-telegram{background:#66c8ee}
 @media(max-width:650px){.floating-contact{right:12px;bottom:14px;gap:8px}.floating-contact a{padding:9px 13px;font-size:11px}}
+
+/* Payment methods */
+.payments{padding-bottom:75px}
+.payment-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:25px}
+.payment-card{display:flex;align-items:center;gap:18px;padding:22px;border:1px solid rgba(255,255,255,.1);border-radius:20px;background:rgba(255,255,255,.035)}
+.payment-mark{width:58px;height:58px;flex:0 0 58px;display:grid;place-items:center;border-radius:17px;font-size:19px;font-weight:900}
+.instapay-mark{background:rgba(87,145,255,.16);color:#8cb5ff}.vodafone-mark{background:rgba(239,65,75,.15);color:#ff737b}
+.payment-info h3{margin:3px 0 5px;font-size:19px}.payment-number{font-size:17px;font-weight:800;letter-spacing:.5px;margin:0 0 9px;color:var(--mint)}
+.copy-payment{border:1px solid rgba(89,220,181,.35);background:rgba(89,220,181,.08);color:var(--mint);border-radius:9px;padding:6px 13px;font:700 11px Cairo,sans-serif;cursor:pointer}
+.payment-warning{font-size:11px;color:var(--muted);margin-top:15px}
+@media(max-width:650px){.payment-grid{grid-template-columns:1fr}.payment-card{padding:17px}}
