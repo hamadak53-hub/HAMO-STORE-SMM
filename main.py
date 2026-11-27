@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Text, Boolean, select, update
@@ -147,8 +147,18 @@ def order_json(item):
             "created_at": item.created_at.isoformat()}
 
 @app.get("/")
-def home():
+def home(request: Request):
+    data = session_data(request)
+    if not data or data.get("role") != "customer":
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(BASE_DIR / "index.html")
+
+@app.get("/login")
+def login_page(request: Request):
+    data = session_data(request)
+    if data and data.get("role") == "customer":
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(BASE_DIR / "login.html")
 
 @app.get("/admin")
 def admin_page():
@@ -218,7 +228,7 @@ def me(user: Customer = Depends(current_user)):
     return {"id": user.id, "name": user.name, "email": user.email, "phone": user.phone}
 
 @app.get("/api/services")
-def list_services(db: Session = Depends(get_db)):
+def list_services(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
     items = db.scalars(select(Service).where(Service.active == True).order_by(Service.platform, Service.id)).all()
     return [service_json(item) for item in items]
 
@@ -464,7 +474,10 @@ def deposit_json(item, db: Session):
             "created_at": item.created_at.isoformat()}
 
 @app.get("/wallet")
-def wallet_page():
+def wallet_page(request: Request):
+    data = session_data(request)
+    if not data or data.get("role") != "customer":
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(BASE_DIR / "wallet.html")
 
 @app.get("/wallet.js")
