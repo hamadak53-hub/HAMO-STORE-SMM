@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+from authlib.integrations.starlette_client import OAuth
 from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Text, Boolean, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
@@ -59,7 +61,10 @@ class Order(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="HAMO STORE SMM API")
+app = FastAPI(title="HAMO STORE API")
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "change-this-secret-before-production"), same_site="lax", https_only=COOKIE_SECURE)
+oauth = OAuth()
+oauth.register(name="google", client_id=os.getenv("GOOGLE_CLIENT_ID"), client_secret=os.getenv("GOOGLE_CLIENT_SECRET"), server_metadata_url="https://accounts.google.com/.well-known/openid-configuration", client_kwargs={"scope": "openid email profile"})
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 serializer = URLSafeTimedSerializer(os.getenv("SECRET_KEY", "change-this-secret-before-production"))
 COOKIE_NAME = "hamo_smm_session"
@@ -185,6 +190,38 @@ def admin_stylesheet():
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "HAMO STORE SMM"}
+
+@app.get("/auth/google")
+async def google_login(request: Request):
+    if not os.getenv("GOOGLE_CLIENT_ID") or not os.getenv("GOOGLE_CLIENT_SECRET"):
+        raise HTTPException(503, "تسجيل Google يحتاج ضبط GOOGLE_CLIENT_ID و GOOGLE_CLIENT_SECRET في إعدادات Render")
+    request.session["google_mode"] = "register" if request.query_params.get("mode") == "register" else "login"
+    redirect_uri = request.url_for("google_callback")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+@app.get("/auth/google/callback", name="google_callback")
+async def google_callback(request: Request, db: Session = Depends(get_db)):
+    try:
+        token = await oauth.google.authorize_access_token(request)
+        info = token.get("userinfo") or await oauth.google.userinfo(token=token)
+    except Exception:
+        raise HTTPException(400, "تعذر إكمال تسجيل الدخول عبر Google. حاول مرة أخرى.")
+    email = str(info.get("email") or "").strip().lower()
+    if not email or not info.get("email_verified"):
+        raise HTTPException(400, "Google لم يؤكد البريد الإلكتروني لهذا الحساب.")
+    user = db.scalar(select(Customer).where(Customer.email == email))
+    if not user:
+        name = str(info.get("name") or info.get("given_name") or "عميل HAMO STORE").strip()[:100]
+        user = Customer(name=name, email=email, phone="", password_hash=pwd_context.hash(secrets.token_urlsafe(32)))
+        db.add(user)
+        db.flush()
+        db.add(Wallet(customer_id=user.id, balance=0))
+        db.commit()
+        db.refresh(user)
+    response = RedirectResponse("/", status_code=303)
+    set_session(response, {"role": "customer", "id": user.id})
+    request.session.pop("google_mode", None)
+    return response
 
 @app.post("/api/register")
 def register(body: RegisterBody, response: Response, db: Session = Depends(get_db)):
