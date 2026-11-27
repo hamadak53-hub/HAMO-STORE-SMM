@@ -41,7 +41,7 @@ async function loadDashboard() {
 }
 function renderOrders(orders) {
   const labels = {pending_payment:"بانتظار الدفع",paid:"تم الدفع",processing:"قيد التنفيذ",completed:"مكتمل",rejected:"مرفوض",cancelled:"ملغي"};
-  $("ordersList").innerHTML = orders.length ? orders.map(o => `<article class="order-row"><div class="order-top"><b>طلب #${o.id} · ${o.service_title}</b><span>${o.total_price} ج.م</span></div><p>العميل رقم ${o.customer_id} · الكمية: ${o.quantity}</p><p><a href="${escapeAttr(o.target_link)}" target="_blank" rel="noopener">فتح الرابط</a></p><p>الحالة: ${labels[o.status] || o.status}</p><div class="order-actions"><select id="status-${o.id}">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${o.status===k?"selected":""}>${v}</option>`).join("")}</select><button data-save-order="${o.id}">حفظ الحالة</button></div></article>`).join("") : '<p class="muted">لسه مفيش طلبات.</p>';
+  $("ordersList").innerHTML = orders.length ? orders.map(o => `<article class="order-row"><div class="order-top"><b>طلب #${o.id} · ${escapeHtml(o.service_title)}</b><span>${o.total_price} ج.م</span></div><p>العميل رقم ${o.customer_id} · الكمية: ${o.quantity}</p><p><a href="${escapeAttr(o.target_link)}" target="_blank" rel="noopener">فتح الرابط</a></p><p>الحالة: ${labels[o.status] || o.status}</p><div class="order-actions"><select id="status-${o.id}">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${o.status===k?"selected":""}>${v}</option>`).join("")}</select><button data-save-order="${o.id}">حفظ الحالة</button></div></article>`).join("") : '<p class="muted">لسه مفيش طلبات.</p>';
 }
 function renderDeposits(items) {
   const methods={vodafone_cash:"فودافون كاش",instapay:"إنستاباي",bank_transfer:"تحويل بنكي"};
