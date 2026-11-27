@@ -34,13 +34,20 @@ async function loadDashboard() {
   $("ordersCount").textContent = summary.orders;
   $("pendingCount").textContent = summary.pending;
   $("revenueCount").textContent = summary.revenue.toLocaleString("ar-EG");
-  const [orders, services] = await Promise.all([api("/api/admin/orders"), api("/api/admin/services")]);
+  const [orders, services, deposits] = await Promise.all([api("/api/admin/orders"), api("/api/admin/services"), api("/api/admin/deposits")]);
   renderOrders(orders);
   renderServices(services);
+  renderDeposits(deposits);
 }
 function renderOrders(orders) {
   const labels = {pending_payment:"بانتظار الدفع",paid:"تم الدفع",processing:"قيد التنفيذ",completed:"مكتمل",rejected:"مرفوض",cancelled:"ملغي"};
   $("ordersList").innerHTML = orders.length ? orders.map(o => `<article class="order-row"><div class="order-top"><b>طلب #${o.id} · ${o.service_title}</b><span>${o.total_price} ج.م</span></div><p>العميل رقم ${o.customer_id} · الكمية: ${o.quantity}</p><p><a href="${escapeAttr(o.target_link)}" target="_blank" rel="noopener">فتح الرابط</a></p><p>الحالة: ${labels[o.status] || o.status}</p><div class="order-actions"><select id="status-${o.id}">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${o.status===k?"selected":""}>${v}</option>`).join("")}</select><button data-save-order="${o.id}">حفظ الحالة</button></div></article>`).join("") : '<p class="muted">لسه مفيش طلبات.</p>';
+}
+function renderDeposits(items) {
+  const methods={vodafone_cash:"فودافون كاش",instapay:"إنستاباي",bank_transfer:"تحويل بنكي"};
+  const states={pending:"قيد المراجعة",approved:"تمت الموافقة",rejected:"مرفوض"};
+  const pending=items.filter(x=>x.status==="pending");
+  $("depositsList").innerHTML=items.length?items.map(d=>`<article class="order-row"><div class="order-top"><b>شحن #${d.id} · ${d.amount} جنيه</b><span>${states[d.status]||d.status}</span></div><p>العميل: ${escapeHtml(d.customer_name||("رقم "+d.customer_id))} · ${escapeHtml(d.customer_email||"")}</p><p>الطريقة: ${methods[d.method]||d.method} · مرجع التحويل: ${escapeHtml(d.sender_reference||"غير مضاف")}</p>${d.status==="pending"?`<div class="order-actions"><button data-deposit-action="approved" data-deposit-id="${d.id}">تأكيد وإضافة الرصيد</button><button class="reject" data-deposit-action="rejected" data-deposit-id="${d.id}">رفض الطلب</button></div>`:d.admin_note?`<p>ملاحظة: ${escapeHtml(d.admin_note)}</p>`:""}</article>`).join(""):'<p class="muted">لا توجد طلبات شحن حتى الآن.</p>';
 }
 function renderServices(services) {
   const platforms = {tiktok:"TikTok",instagram:"Instagram",facebook:"Facebook",youtube:"YouTube",telegram:"Telegram"};
@@ -55,6 +62,7 @@ $("loginForm").addEventListener("submit", async e => {
 });
 $("logoutBtn").addEventListener("click",async()=>{await api("/api/logout",{method:"POST"});location.reload();});
 $("refreshBtn").addEventListener("click",()=>loadDashboard().catch(e=>alert(e.message)));
+$("refreshDeposits").addEventListener("click",()=>loadDashboard().catch(e=>alert(e.message)));
 $("serviceForm").addEventListener("submit",async e=>{
   e.preventDefault();const form=e.currentTarget;const f=new FormData(form);
   const body={platform:f.get("platform"),title:f.get("title"),description:f.get("description"),price:Number(f.get("price")),min_quantity:Number(f.get("min_quantity")),max_quantity:Number(f.get("max_quantity")),active:form.elements.active.checked};
@@ -67,7 +75,9 @@ document.addEventListener("click",async e=>{
   const save=e.target.closest("[data-save-order]");
   const remove=e.target.closest("[data-remove-service]");
   const edit=e.target.closest("[data-edit-service]");
+  const deposit=e.target.closest("[data-deposit-action]");
   try{
+    if(deposit){const id=deposit.dataset.depositId;const status=deposit.dataset.depositAction;const note=status==="rejected"?(prompt("سبب رفض طلب الشحن (اختياري):")||""):"";if(status==="rejected"&&!confirm("تأكيد رفض طلب الشحن؟"))return;if(status==="approved"&&!confirm("تأكيد استلام التحويل وإضافة المبلغ إلى محفظة العميل؟"))return;await api("/api/admin/deposits/"+id,{method:"PATCH",body:JSON.stringify({status,admin_note:note})});await loadDashboard();return;}
     if(edit){const services=await api("/api/admin/services");const s=services.find(x=>x.id===Number(edit.dataset.editService));if(!s)return;const form=$("serviceForm");form.elements.platform.value=s.platform;form.elements.title.value=s.title;form.elements.description.value=s.description;form.elements.price.value=s.price;form.elements.min_quantity.value=s.min_quantity;form.elements.max_quantity.value=s.max_quantity;form.elements.active.checked=s.active;$("serviceId").value=s.id;$("serviceSubmit").textContent="حفظ التعديلات";$("cancelEdit").hidden=false;showMessage("serviceMessage","تعديل الخدمة: "+s.title);form.scrollIntoView({behavior:"smooth",block:"center"});}
     if(save){const id=save.dataset.saveOrder;const status=$("status-"+id).value;await api("/api/admin/orders/"+id,{method:"PATCH",body:JSON.stringify({status,admin_note:""})});await loadDashboard();}
     if(remove){if(!confirm("متأكد إنك عايز تزيل الخدمة؟ لو عليها طلبات سابقة هنحتفظ بسجلها ونمنع طلبها من المتجر."))return;const result=await api("/api/admin/services/"+remove.dataset.removeService,{method:"DELETE"});alert(result.message);await loadDashboard();}
