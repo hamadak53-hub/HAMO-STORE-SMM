@@ -11,7 +11,7 @@ async function loadServices(platform="tiktok"){
   items.forEach((s,i)=>{const card=document.createElement("article");card.className="service-card";
     const icon=document.createElement("div");icon.className="service-icon";icon.textContent=["♥","◉","♟"][i%3];
     const info=document.createElement("div");const h=document.createElement("h4");h.textContent=s.title;const p=document.createElement("p");p.textContent=(s.description||"متاحة للطلب")+" · "+s.price+" جنيه / 1000";info.append(h,p);
-    const btn=document.createElement("button");btn.className="order-btn";btn.textContent="اطلب الخدمة ←";btn.dataset.id=s.id;btn.dataset.title=s.title;btn.dataset.min=s.min_quantity;btn.dataset.max=s.max_quantity;
+    const btn=document.createElement("button");btn.className="order-btn";btn.textContent=loggedInUser?"اطلب الخدمة ←":"سجّل الدخول للطلب ←";btn.dataset.id=s.id;btn.dataset.title=s.title;btn.dataset.min=s.min_quantity;btn.dataset.max=s.max_quantity;
     card.append(icon,info,btn);serviceGrid.append(card);
   });
 }
@@ -40,4 +40,4 @@ $("orderForm").addEventListener("submit",async e=>{e.preventDefault();const link
   }catch(err){feedback.textContent=err.message;}
 });
 $("menuToggle").addEventListener("click",()=>document.querySelector(".desktop-nav").classList.toggle("show"));document.querySelectorAll(".desktop-nav a").forEach(a=>a.addEventListener("click",()=>document.querySelector(".desktop-nav").classList.remove("show")));
-$("year").textContent=new Date().getFullYear();fetch("/api/me",{credentials:"same-origin"}).then(r=>r.ok?r.json():null).then(user=>{loggedInUser=user;}).catch(()=>{});loadServices();
+$("year").textContent=new Date().getFullYear();fetch("/api/me",{credentials:"same-origin"}).then(r=>r.ok?r.json():null).then(user=>{loggedInUser=user;document.querySelectorAll(".order-btn").forEach(btn=>{btn.textContent=loggedInUser?"اطلب الخدمة ←":"سجّل الدخول للطلب ←";});}).catch(()=>{});loadServices();
