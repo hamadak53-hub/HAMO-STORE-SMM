@@ -232,6 +232,10 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     total = (service.price * body.quantity + 999) // 1000
     if total < 1:
         raise HTTPException(400, "قيمة الطلب غير صحيحة")
+    mapping = db.scalar(select(ProviderServiceMap).where(
+        ProviderServiceMap.local_service_id == service.id))
+    if mapping and not os.getenv("PANELFOLLOWS_API_KEY", "").strip():
+        raise HTTPException(503, "خدمة المورد غير مفعّلة حاليًا. تواصل مع الإدارة.")
     wallet_for(db, user.id)
     # Atomic conditional debit prevents concurrent requests from spending the same balance.
     debit = db.execute(
@@ -260,13 +264,9 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     db.refresh(wallet)
 
     # If this service is mapped to PanelFollows, submit it server-side.
-    mapping = db.scalar(select(ProviderServiceMap).where(
-        ProviderServiceMap.local_service_id == service.id))
     if mapping:
         api_key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
-        if not api_key:
-            raise HTTPException(503, "خدمة المورد غير مفعّلة حاليًا. تواصل مع الإدارة.")
-        from provider_client import PanelFollowsClient, ProviderAPIError
+        from provider_client import PanelFollowsClient
         try:
             provider_result = PanelFollowsClient(api_key).add_order(
                 mapping.provider_service_id, body.target_link.strip(), body.quantity)
@@ -700,10 +700,3 @@ def sync_provider_order(local_order_id: int, _=Depends(admin_only), db: Session 
     return {"ok": True, "order": order_json(order),
             "provider_status": remote_status, "provider_charge_usd": data.get("charge"),
             "provider_remains": data.get("remains")}
-
-def panel_follows_client():
-    from provider_client import PanelFollowsClient
-    key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
-    if not key:
-        raise HTTPException(503, "مفتاح PanelFollows غير مضبوط في إعدادات الاستضافة")
-    return PanelFollowsClient(key)
