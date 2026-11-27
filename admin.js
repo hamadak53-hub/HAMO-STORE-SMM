@@ -52,7 +52,7 @@ async function loadProviderStatus() {
   } catch (e) { $("providerBalance").textContent = e.message; }
 }
 async function loadProviderServices() {
-  $("providerServices").textContent = "جاري تحميل خدمات TikTok من المورد...";
+  $("providerServices").textContent = "جاري تحميل كل خدمات المورد...";
   try {
     const items = await api("/api/admin/provider/services");
     $("providerServices").innerHTML = items.length ? items.map(s =>
@@ -80,7 +80,7 @@ function renderDeposits(items) {
   ).join("") : '<p class="muted">لا توجد طلبات شحن حتى الآن.</p>';
 }
 function renderServices(services) {
-  const platforms = {tiktok:"TikTok",instagram:"Instagram",facebook:"Facebook",youtube:"YouTube",telegram:"Telegram"};
+  const platforms = {tiktok:"TikTok",instagram:"Instagram",facebook:"Facebook",youtube:"YouTube",telegram:"Telegram",snapchat:"Snapchat",x:"X / Twitter",linkedin:"LinkedIn",threads:"Threads",discord:"Discord",spotify:"Spotify",twitch:"Twitch",jaco:"Jaco",other:"أخرى"};
   $("serviceList").innerHTML = services.length ? services.map(s =>
     '<div class="service-row"><span><b>'+escapeHtml(s.title)+'</b><br><small>'+(platforms[s.platform]||escapeHtml(s.platform))+' · '+s.price+' جنيه / 1000 · '+(s.active?"نشطة":"مخفية")+'</small></span><span><button data-edit-service="'+s.id+'">تعديل</button> <button data-remove-service="'+s.id+'">إخفاء</button></span></div>'
   ).join("") : '<p class="muted">أضف أول خدمة من النموذج.</p>';
