@@ -6,6 +6,28 @@ async function api(path, options = {}) {
   return data;
 }
 function showMessage(id, text) { $(id).textContent = text; }
+const serviceTemplates = [{"platform":"tiktok","title":"ترويج فيديو TikTok عبر حملة إعلانية","description":"إعداد أو إدارة حملة ترويج مدفوعة للوصول إلى جمهور حقيقي عبر أدوات الإعلان الرسمية."},{"platform":"tiktok","title":"إدارة حملة TikTok للحساب التجاري","description":"إعداد ومتابعة حملة إعلانية للحساب أو النشاط التجاري."},{"platform":"instagram","title":"ترويج منشور Instagram بإعلان رسمي","description":"إعداد حملة ترويج مدفوعة لمنشور للوصول إلى جمهور مستهدف حقيقي."},{"platform":"instagram","title":"إدارة حملة Instagram للحساب التجاري","description":"إعداد ومتابعة حملة إعلانية للحساب أو النشاط التجاري."},{"platform":"facebook","title":"ترويج منشور Facebook بإعلان رسمي","description":"إعداد حملة إعلانية لزيادة الوصول الحقيقي للمنشور."},{"platform":"facebook","title":"إدارة حملة Facebook للصفحة","description":"إعداد ومتابعة حملة إعلانية للصفحة أو النشاط التجاري."},{"platform":"youtube","title":"ترويج فيديو YouTube عبر Google Ads","description":"إعداد حملة فيديو مدفوعة للوصول إلى مشاهدين حقيقيين وفق سياسات YouTube."},{"platform":"youtube","title":"إدارة حملة إعلانية لقناة YouTube","description":"إعداد ومتابعة حملات ترويج محتوى القناة عبر أدوات Google Ads."},{"platform":"telegram","title":"ترويج قناة Telegram بإعلانات مباشرة","description":"تنسيق ترويج القناة عبر قنوات أو مجتمعات ذات صلة وبموافقة أصحابها."},{"platform":"telegram","title":"إدارة حملة اكتساب مشتركين حقيقيين لقناة Telegram","description":"تخطيط وقياس حملة ترويج للقناة عبر مصادر معلنة ومصرح بها."}];
+function loadServiceTemplates(){
+  const select=$("serviceTemplate");
+  serviceTemplates.forEach((item,index)=>{const option=document.createElement("option");option.value=String(index);option.textContent=item.platform.toUpperCase()+" — "+item.title;select.append(option);});
+}
+loadServiceTemplates();
+$("serviceTemplate").addEventListener("change",()=>{
+  const item=serviceTemplates[Number($("serviceTemplate").value)];
+  if(!item)return;
+  const form=$("serviceForm");
+  form.elements.platform.value=item.platform;
+  form.elements.title.value=item.title;
+  form.elements.description.value=item.description;
+  form.elements.min_quantity.value=1;
+  form.elements.max_quantity.value=1;
+  form.elements.price.value="";
+  form.elements.active.checked=false;
+  $("serviceId").value="";
+  $("serviceSubmit").textContent="إضافة الخدمة";
+  $("cancelEdit").hidden=true;
+  showMessage("serviceMessage","قالب جاهز: حدد سعر التنفيذ والكمية بعد الاتفاق مع المنفذ.");
+});
 async function loadDashboard() {
   const summary = await api("/api/admin/summary");
   $("customersCount").textContent = summary.customers;
@@ -35,7 +57,7 @@ $("logoutBtn").addEventListener("click",async()=>{await api("/api/logout",{metho
 $("refreshBtn").addEventListener("click",()=>loadDashboard().catch(e=>alert(e.message)));
 $("serviceForm").addEventListener("submit",async e=>{
   e.preventDefault();const form=e.currentTarget;const f=new FormData(form);
-  const body={platform:f.get("platform"),title:f.get("title"),description:f.get("description"),price:Number(f.get("price")),min_quantity:Number(f.get("min_quantity")),max_quantity:Number(f.get("max_quantity")),active:true};
+  const body={platform:f.get("platform"),title:f.get("title"),description:f.get("description"),price:Number(f.get("price")),min_quantity:Number(f.get("min_quantity")),max_quantity:Number(f.get("max_quantity")),active:form.elements.active.checked};
   const serviceId = $("serviceId").value;
   try{await api(serviceId ? "/api/admin/services/"+serviceId : "/api/admin/services",{method:serviceId ? "PUT" : "POST",body:JSON.stringify(body)});form.reset();$("serviceId").value="";$("serviceSubmit").textContent="إضافة الخدمة";$("cancelEdit").hidden=true;showMessage("serviceMessage",serviceId ? "تم تحديث الخدمة والسعر." : "تمت إضافة الخدمة.");await loadDashboard();}
   catch(err){showMessage("serviceMessage",err.message);}
@@ -46,7 +68,7 @@ document.addEventListener("click",async e=>{
   const remove=e.target.closest("[data-remove-service]");
   const edit=e.target.closest("[data-edit-service]");
   try{
-    if(edit){const services=await api("/api/admin/services");const s=services.find(x=>x.id===Number(edit.dataset.editService));if(!s)return;const form=$("serviceForm");form.elements.platform.value=s.platform;form.elements.title.value=s.title;form.elements.description.value=s.description;form.elements.price.value=s.price;form.elements.min_quantity.value=s.min_quantity;form.elements.max_quantity.value=s.max_quantity;$("serviceId").value=s.id;$("serviceSubmit").textContent="حفظ التعديلات";$("cancelEdit").hidden=false;showMessage("serviceMessage","تعديل الخدمة: "+s.title);form.scrollIntoView({behavior:"smooth",block:"center"});}
+    if(edit){const services=await api("/api/admin/services");const s=services.find(x=>x.id===Number(edit.dataset.editService));if(!s)return;const form=$("serviceForm");form.elements.platform.value=s.platform;form.elements.title.value=s.title;form.elements.description.value=s.description;form.elements.price.value=s.price;form.elements.min_quantity.value=s.min_quantity;form.elements.max_quantity.value=s.max_quantity;form.elements.active.checked=s.active;$("serviceId").value=s.id;$("serviceSubmit").textContent="حفظ التعديلات";$("cancelEdit").hidden=false;showMessage("serviceMessage","تعديل الخدمة: "+s.title);form.scrollIntoView({behavior:"smooth",block:"center"});}
     if(save){const id=save.dataset.saveOrder;const status=$("status-"+id).value;await api("/api/admin/orders/"+id,{method:"PATCH",body:JSON.stringify({status,admin_note:""})});await loadDashboard();}
     if(remove){if(!confirm("متأكد إنك عايز تزيل الخدمة؟ لو عليها طلبات سابقة هنحتفظ بسجلها ونمنع طلبها من المتجر."))return;const result=await api("/api/admin/services/"+remove.dataset.removeService,{method:"DELETE"});alert(result.message);await loadDashboard();}
   }catch(err){alert(err.message);}
