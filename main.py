@@ -147,10 +147,8 @@ def order_json(item):
             "created_at": item.created_at.isoformat()}
 
 @app.get("/")
-def home(request: Request):
-    data = session_data(request)
-    if not data or data.get("role") != "customer":
-        return RedirectResponse("/login", status_code=303)
+def home():
+    # Public storefront: visitors can browse without creating an account.
     return FileResponse(BASE_DIR / "index.html")
 
 @app.get("/login")
@@ -232,7 +230,7 @@ def me(user: Customer = Depends(current_user)):
     return {"id": user.id, "name": user.name, "email": user.email, "phone": user.phone}
 
 @app.get("/api/services")
-def list_services(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
+def list_services(db: Session = Depends(get_db)):
     items = db.scalars(select(Service).where(Service.active == True).order_by(Service.platform, Service.id)).all()
     return [service_json(item) for item in items]
 
