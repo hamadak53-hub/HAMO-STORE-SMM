@@ -457,7 +457,7 @@ def review_deposit(deposit_id: int, body: DepositReviewBody,
     item.status = body.status
     item.admin_note = body.admin_note.strip()
     db.commit()
-    return {"ok": True, "deposit": deposit_json(item)}
+    return {"ok": True, "deposit": deposit_json(item, db)}
 
 @app.get("/api/admin/customers")
 def admin_customers(_=Depends(admin_only), db: Session = Depends(get_db)):
