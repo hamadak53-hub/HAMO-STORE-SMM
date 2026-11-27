@@ -1,4 +1,5 @@
 import os
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -218,6 +219,7 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         token = await oauth.google.authorize_access_token(request)
         info = token.get("userinfo") or await oauth.google.userinfo(token=token)
     except Exception:
+        logging.exception("Google OAuth callback failed")
         raise HTTPException(400, "تعذر إكمال تسجيل الدخول عبر Google. حاول مرة أخرى.")
     email = str(info.get("email") or "").strip().lower()
     if not email or not info.get("email_verified"):
