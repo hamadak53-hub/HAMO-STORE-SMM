@@ -172,6 +172,10 @@ def stylesheet():
 def frontend_script():
     return FileResponse(BASE_DIR / "script.js", media_type="application/javascript")
 
+@app.get("/login.js")
+def login_script():
+    return FileResponse(BASE_DIR / "login.js", media_type="application/javascript")
+
 @app.get("/admin.js")
 def admin_script():
     return FileResponse(BASE_DIR / "admin.js", media_type="application/javascript")
