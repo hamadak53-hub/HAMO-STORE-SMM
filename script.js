@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const serviceGrid = $("serviceGrid"), modal = $("orderModal"), serviceInput = $("serviceName"), feedback = $("formFeedback");
-let selectedServiceId = 0, catalog = [];
-const titles = {tiktok:"خدمات تيك توك",instagram:"خدمات إنستجرام",facebook:"خدمات فيسبوك",youtube:"خدمات يوتيوب"};
+let selectedServiceId = 0, catalog = [], loggedInUser = null;
+const titles = {tiktok:"خدمات تيك توك",instagram:"خدمات إنستجرام",facebook:"خدمات فيسبوك",youtube:"خدمات يوتيوب",telegram:"خدمات تليجرام"};
 async function loadServices(platform="tiktok"){
   try { const res=await fetch("/api/services"); catalog=await res.json(); } catch(e){ catalog=[]; }
   $("selectedPlatformTitle").textContent=titles[platform]||"الخدمات المتاحة";
@@ -16,7 +16,10 @@ async function loadServices(platform="tiktok"){
   });
 }
 document.querySelectorAll(".platform-card").forEach(b=>b.addEventListener("click",()=>{document.querySelectorAll(".platform-card").forEach(x=>x.classList.remove("active"));b.classList.add("active");loadServices(b.dataset.platform);}));
-function openOrder(btn){selectedServiceId=Number(btn.dataset.id);serviceInput.value=btn.dataset.title;$("quantity").min=btn.dataset.min;$("quantity").max=btn.dataset.max;feedback.textContent="";modal.classList.add("open");modal.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";$("accountLink").focus();}
+function openOrder(btn){selectedServiceId=Number(btn.dataset.id);serviceInput.value=btn.dataset.title;$("quantity").min=btn.dataset.min;$("quantity").max=btn.dataset.max;feedback.textContent="";
+  ["customerName","customerEmail","customerPhone","customerPassword"].forEach(id=>{const el=$(id);const wrap=el.previousElementSibling;const visible=!loggedInUser&&id!=="customerPhone";el.required=visible;if(wrap&&wrap.tagName==="LABEL")wrap.hidden=!!loggedInUser;el.hidden=!!loggedInUser;if(id==="customerName"&&loggedInUser)el.value=loggedInUser.name;if(id==="customerEmail"&&loggedInUser)el.value=loggedInUser.email;});
+  $("customerLogin").hidden=!!loggedInUser;$("orderForm").querySelector(".submit-btn").textContent=loggedInUser?"تأكيد الطلب ←":"إنشاء الحساب وإرسال الطلب ←";
+  modal.classList.add("open");modal.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";$("accountLink").focus();}
 function closeOrder(){modal.classList.remove("open");modal.setAttribute("aria-hidden","true");document.body.style.overflow="";}
 serviceGrid.addEventListener("click",e=>{const btn=e.target.closest("button[data-id]");if(btn)openOrder(btn);});
 $("modalClose").addEventListener("click",closeOrder);modal.addEventListener("click",e=>{if(e.target===modal)closeOrder();});document.addEventListener("keydown",e=>{if(e.key==="Escape")closeOrder();});
@@ -24,9 +27,9 @@ $("customerLogin").addEventListener("click",async()=>{const email=prompt("اكت
 $("orderForm").addEventListener("submit",async e=>{e.preventDefault();const link=$("accountLink").value.trim(),quantity=Number($("quantity").value),email=$("customerEmail").value.trim(),password=$("customerPassword").value,name=$("customerName").value.trim(),phone=$("customerPhone").value.trim();
   if(!selectedServiceId||!link||!Number.isInteger(quantity)||quantity<Number($("quantity").min)||quantity>Number($("quantity").max)){feedback.textContent="راجع الخدمة والرابط والكمية.";return;}
   feedback.textContent="جاري إنشاء الحساب وإرسال الطلب...";
-  try{const me=await fetch("/api/me",{credentials:"same-origin"});if(me.status===401){const reg=await fetch("/api/register",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,email,phone,password})});const rd=await reg.json();if(!reg.ok)throw new Error(rd.detail||"تعذر إنشاء الحساب");}else if(!me.ok)throw new Error("تعذر التحقق من الحساب");
+  try{const me=await fetch("/api/me",{credentials:"same-origin"});if(me.status===401){const reg=await fetch("/api/register",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,email,phone,password})});const rd=await reg.json();if(!reg.ok)throw new Error(rd.detail||"تعذر إنشاء الحساب");loggedInUser=rd.user;}else if(!me.ok)throw new Error("تعذر التحقق من الحساب");else loggedInUser=await me.json();
     const res=await fetch("/api/orders",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({service_id:selectedServiceId,target_link:link,quantity})});const data=await res.json();if(!res.ok)throw new Error(data.detail||"تعذر إرسال الطلب");feedback.textContent="تم إنشاء طلبك رقم #"+data.order.id+". احتفظ بالرقم لمتابعته.";
   }catch(err){feedback.textContent=err.message;}
 });
 $("menuToggle").addEventListener("click",()=>document.querySelector(".desktop-nav").classList.toggle("show"));document.querySelectorAll(".desktop-nav a").forEach(a=>a.addEventListener("click",()=>document.querySelector(".desktop-nav").classList.remove("show")));
-$("year").textContent=new Date().getFullYear();loadServices();
+$("year").textContent=new Date().getFullYear();fetch("/api/me",{credentials:"same-origin"}).then(r=>r.ok?r.json():null).then(user=>{loggedInUser=user;}).catch(()=>{});loadServices();

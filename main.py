@@ -4,10 +4,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, EmailStr
-from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Text, Boolean, select
+from sqlalchemy import create_engine, String, Integer, DateTime, ForeignKey, Text, Boolean, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from passlib.context import CryptContext
@@ -147,8 +147,18 @@ def order_json(item):
             "created_at": item.created_at.isoformat()}
 
 @app.get("/")
-def home():
+def home(request: Request):
+    data = session_data(request)
+    if not data or data.get("role") != "customer":
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(BASE_DIR / "index.html")
+
+@app.get("/login")
+def login_page(request: Request):
+    data = session_data(request)
+    if data and data.get("role") == "customer":
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(BASE_DIR / "login.html")
 
 @app.get("/admin")
 def admin_page():
@@ -161,6 +171,10 @@ def stylesheet():
 @app.get("/script.js")
 def frontend_script():
     return FileResponse(BASE_DIR / "script.js", media_type="application/javascript")
+
+@app.get("/login.js")
+def login_script():
+    return FileResponse(BASE_DIR / "login.js", media_type="application/javascript")
 
 @app.get("/admin.js")
 def admin_script():
@@ -182,6 +196,8 @@ def register(body: RegisterBody, response: Response, db: Session = Depends(get_d
     user = Customer(name=body.name.strip(), email=email, phone=body.phone.strip(),
                     password_hash=pwd_context.hash(body.password))
     db.add(user)
+    db.flush()
+    db.add(Wallet(customer_id=user.id, balance=0))
     db.commit()
     db.refresh(user)
     set_session(response, {"role": "customer", "id": user.id})
@@ -216,7 +232,7 @@ def me(user: Customer = Depends(current_user)):
     return {"id": user.id, "name": user.name, "email": user.email, "phone": user.phone}
 
 @app.get("/api/services")
-def list_services(db: Session = Depends(get_db)):
+def list_services(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
     items = db.scalars(select(Service).where(Service.active == True).order_by(Service.platform, Service.id)).all()
     return [service_json(item) for item in items]
 
@@ -228,13 +244,74 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     if body.quantity < service.min_quantity or body.quantity > service.max_quantity:
         raise HTTPException(400, f"الكمية يجب أن تكون بين {service.min_quantity} و{service.max_quantity}")
     total = (service.price * body.quantity + 999) // 1000
+    if total < 1:
+        raise HTTPException(400, "قيمة الطلب غير صحيحة")
+    mapping = db.scalar(select(ProviderServiceMap).where(
+        ProviderServiceMap.local_service_id == service.id))
+    if mapping and not os.getenv("PANELFOLLOWS_API_KEY", "").strip():
+        raise HTTPException(503, "خدمة المورد غير مفعّلة حاليًا. تواصل مع الإدارة.")
+    wallet_for(db, user.id)
+    # Atomic conditional debit prevents concurrent requests from spending the same balance.
+    debit = db.execute(
+        update(Wallet)
+        .where(Wallet.customer_id == user.id, Wallet.balance >= total)
+        .values(balance=Wallet.balance - total)
+    )
+    if debit.rowcount != 1:
+        db.rollback()
+        raise HTTPException(400, "رصيدك غير كافٍ. اشحن محفظتك أولاً.")
+    wallet = db.scalar(select(Wallet).where(Wallet.customer_id == user.id))
     order = Order(customer_id=user.id, service_id=service.id, service_title=service.title,
                   target_link=body.target_link.strip(), quantity=body.quantity,
-                  total_price=total, status="pending_payment")
+                  total_price=total, status="paid")
     db.add(order)
-    db.commit()
+    db.flush()
+    db.add(WalletTransaction(customer_id=user.id, amount=-total, balance_after=wallet.balance,
+                             kind="order", reference=f"order:{order.id}",
+                             note=f"خصم قيمة الطلب #{order.id}"))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(order)
-    return {"ok": True, "order": order_json(order)}
+    db.refresh(wallet)
+
+    # If this service is mapped to PanelFollows, submit it server-side.
+    if mapping:
+        api_key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
+        from provider_client import PanelFollowsClient
+        try:
+            provider_result = PanelFollowsClient(api_key).add_order(
+                mapping.provider_service_id, body.target_link.strip(), body.quantity)
+            provider_order_id = str(provider_result["order"])
+            db.add(ProviderOrderMap(local_order_id=order.id,
+                                    provider_order_id=provider_order_id,
+                                    provider_status="Pending"))
+            order.status = "processing"
+            db.commit()
+            db.refresh(order)
+        except Exception as exc:
+            db.rollback()
+            # Provider submission failed: refund the already-debited customer wallet.
+            wallet = db.scalar(select(Wallet).where(
+                Wallet.customer_id == user.id).with_for_update())
+            refund_ref = f"refund:provider-submit:{order.id}"
+            exists = db.scalar(select(WalletTransaction).where(
+                WalletTransaction.reference == refund_ref))
+            if wallet and not exists:
+                wallet.balance += total
+                db.add(WalletTransaction(customer_id=user.id, amount=total,
+                    balance_after=wallet.balance, kind="refund", reference=refund_ref,
+                    note=f"استرداد تعذر تنفيذ الطلب #{order.id}"))
+            order = db.get(Order, order.id)
+            if order:
+                order.status = "rejected"
+                order.admin_note = "تعذر إرسال الطلب للمورد؛ تم رد المبلغ للمحفظة."
+            db.commit()
+            raise HTTPException(502, "المورد لم يقبل الطلب. تم رد المبلغ إلى محفظتك.") from exc
+
+    return {"ok": True, "order": order_json(order), "wallet_balance": wallet.balance}
 
 @app.get("/api/orders")
 def my_orders(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
@@ -254,15 +331,42 @@ def admin_orders(_=Depends(admin_only), db: Session = Depends(get_db)):
 
 @app.patch("/api/admin/orders/{order_id}")
 def update_order(order_id: int, body: StatusBody, _=Depends(admin_only), db: Session = Depends(get_db)):
-    allowed = {"pending_payment", "paid", "processing", "completed", "rejected", "cancelled"}
-    if body.status not in allowed:
+    transitions = {
+        "pending_payment": {"paid", "rejected", "cancelled"},
+        "paid": {"processing", "rejected", "cancelled"},
+        "processing": {"completed"},
+        "completed": set(),
+        "rejected": set(),
+        "cancelled": set(),
+    }
+    if body.status not in transitions:
         raise HTTPException(400, "حالة الطلب غير صحيحة")
-    order = db.get(Order, order_id)
+    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
     if not order:
         raise HTTPException(404, "الطلب غير موجود")
+    if body.status != order.status and body.status not in transitions.get(order.status, set()):
+        raise HTTPException(409, "لا يمكن تغيير حالة الطلب من الحالة الحالية.")
+    if body.status in {"rejected", "cancelled"} and order.status in {"pending_payment", "paid"}:
+        charged = db.scalar(select(WalletTransaction).where(
+            WalletTransaction.reference == f"order:{order.id}"))
+        wallet = db.scalar(select(Wallet).where(
+            Wallet.customer_id == order.customer_id).with_for_update())
+        if charged and wallet and order.total_price > 0:
+            reference = f"refund:order:{order.id}"
+            exists = db.scalar(select(WalletTransaction).where(
+                WalletTransaction.reference == reference))
+            if not exists:
+                wallet.balance += order.total_price
+                db.add(WalletTransaction(customer_id=order.customer_id, amount=order.total_price,
+                    balance_after=wallet.balance, kind="refund", reference=reference,
+                    note=f"استرداد قيمة الطلب #{order.id}"))
     order.status = body.status
-    order.admin_note = body.admin_note
-    db.commit()
+    order.admin_note = body.admin_note.strip()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {"ok": True, "order": order_json(order)}
 
 @app.get("/api/admin/services")
@@ -308,4 +412,309 @@ def remove_service(service_id: int, _=Depends(admin_only), db: Session = Depends
     return {"ok": True, "removed": True, "archived": False,
             "message": "تمت إزالة الخدمة نهائياً"}
 
+
+# --- HAMO STORE wallet and manual top-ups ---
+class Wallet(Base):
+    __tablename__ = "wallets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), unique=True, index=True)
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class WalletTransaction(Base):
+    __tablename__ = "wallet_transactions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    balance_after: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(30))
+    reference: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class DepositRequest(Base):
+    __tablename__ = "deposit_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    method: Mapped[str] = mapped_column(String(30))
+    sender_reference: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    admin_note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+class DepositBody(BaseModel):
+    amount: int = Field(ge=10, le=100000)
+    method: str = Field(min_length=3, max_length=30)
+    sender_reference: str = Field(default="", max_length=120)
+
+class DepositReviewBody(BaseModel):
+    status: str
+    admin_note: str = Field(default="", max_length=300)
+
+def wallet_for(db: Session, customer_id: int):
+    wallet = db.scalar(select(Wallet).where(Wallet.customer_id == customer_id).with_for_update())
+    if not wallet:
+        wallet = Wallet(customer_id=customer_id, balance=0)
+        db.add(wallet)
+        db.flush()
+    return wallet
+
+def transaction_json(item):
+    return {"id": item.id, "amount": item.amount, "balance_after": item.balance_after,
+            "kind": item.kind, "reference": item.reference, "note": item.note,
+            "created_at": item.created_at.isoformat()}
+
+def deposit_json(item, db: Session):
+    customer = item.customer_id
+    owner = db.get(Customer, customer)
+    return {"id": item.id, "customer_id": customer,
+            "customer_name": owner.name if owner else "", "customer_email": owner.email if owner else "",
+            "customer_phone": owner.phone if owner else "", "amount": item.amount,
+            "method": item.method, "sender_reference": item.sender_reference,
+            "status": item.status, "admin_note": item.admin_note,
+            "created_at": item.created_at.isoformat()}
+
+@app.get("/wallet")
+def wallet_page(request: Request):
+    data = session_data(request)
+    if not data or data.get("role") != "customer":
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(BASE_DIR / "wallet.html")
+
+@app.get("/wallet.js")
+def wallet_script():
+    return FileResponse(BASE_DIR / "wallet.js", media_type="application/javascript")
+
+@app.get("/wallet.css")
+def wallet_stylesheet():
+    return FileResponse(BASE_DIR / "wallet.css", media_type="text/css")
+
+@app.get("/api/wallet")
+def wallet_summary(user: Customer = Depends(current_user), db: Session = Depends(get_db)):
+    wallet = wallet_for(db, user.id)
+    db.commit()
+    txs = db.scalars(select(WalletTransaction).where(
+        WalletTransaction.customer_id == user.id).order_by(WalletTransaction.id.desc()).limit(50)).all()
+    deposits = db.scalars(select(DepositRequest).where(
+        DepositRequest.customer_id == user.id).order_by(DepositRequest.id.desc()).limit(20)).all()
+    return {"balance": wallet.balance, "transactions": [transaction_json(x) for x in txs],
+            "deposits": [deposit_json(x, db) for x in deposits]}
+
+@app.post("/api/deposits")
+def request_deposit(body: DepositBody, user: Customer = Depends(current_user), db: Session = Depends(get_db)):
+    allowed_methods = {"vodafone_cash", "instapay", "bank_transfer"}
+    if body.method not in allowed_methods:
+        raise HTTPException(400, "طريقة الشحن غير متاحة")
+    item = DepositRequest(customer_id=user.id, amount=body.amount, method=body.method,
+                          sender_reference=body.sender_reference.strip())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"ok": True, "deposit": deposit_json(item, db),
+            "message": "تم تسجيل طلب الشحن، وسيُضاف الرصيد بعد مراجعة الإدارة."}
+
+@app.get("/api/admin/deposits")
+def admin_deposits(_=Depends(admin_only), db: Session = Depends(get_db)):
+    rows = db.scalars(select(DepositRequest).order_by(DepositRequest.id.desc()).limit(200)).all()
+    return [deposit_json(x, db) for x in rows]
+
+@app.patch("/api/admin/deposits/{deposit_id}")
+def review_deposit(deposit_id: int, body: DepositReviewBody,
+                   _=Depends(admin_only), db: Session = Depends(get_db)):
+    if body.status not in {"approved", "rejected"}:
+        raise HTTPException(400, "حالة طلب الشحن غير صحيحة")
+    item = db.scalar(select(DepositRequest).where(DepositRequest.id == deposit_id).with_for_update())
+    if not item:
+        raise HTTPException(404, "طلب الشحن غير موجود")
+    # Claim the pending request atomically; only one concurrent admin action can win.
+    claimed = db.execute(
+        update(DepositRequest)
+        .where(DepositRequest.id == item.id, DepositRequest.status == "pending")
+        .values(status=body.status, admin_note=body.admin_note.strip())
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, "تمت مراجعة طلب الشحن بالفعل")
+    if body.status == "approved":
+        wallet = wallet_for(db, item.customer_id)
+        db.execute(
+            update(Wallet)
+            .where(Wallet.customer_id == item.customer_id)
+            .values(balance=Wallet.balance + item.amount)
+        )
+        db.flush()
+        db.refresh(wallet)
+        db.add(WalletTransaction(customer_id=item.customer_id, amount=item.amount,
+            balance_after=wallet.balance, kind="deposit", reference=f"deposit:{item.id}",
+            note=f"شحن رصيد عبر {item.method} — طلب #{item.id}"))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(item)
+    return {"ok": True, "deposit": deposit_json(item, db)}
+
+@app.get("/api/admin/customers")
+def admin_customers(_=Depends(admin_only), db: Session = Depends(get_db)):
+    rows = db.scalars(select(Customer).order_by(Customer.id.desc()).limit(500)).all()
+    result = []
+    for customer in rows:
+        wallet = db.scalar(select(Wallet).where(Wallet.customer_id == customer.id))
+        result.append({"id": customer.id, "name": customer.name, "email": customer.email,
+                       "phone": customer.phone, "balance": wallet.balance if wallet else 0})
+    return result
+
 app.mount("/assets", StaticFiles(directory=BASE_DIR), name="assets")
+
+
+# --- PanelFollows provider integration ---
+class ProviderServiceMap(Base):
+    __tablename__ = "provider_service_maps"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    local_service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), unique=True, index=True)
+    provider_service_id: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    provider_rate_usd: Mapped[str] = mapped_column(String(30), default="0")
+    provider_min: Mapped[int] = mapped_column(Integer, default=1)
+    provider_max: Mapped[int] = mapped_column(Integer, default=100000)
+
+class ProviderOrderMap(Base):
+    __tablename__ = "provider_order_maps"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    local_order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), unique=True, index=True)
+    provider_order_id: Mapped[str] = mapped_column(String(60), unique=True, index=True)
+    provider_status: Mapped[str] = mapped_column(String(40), default="Pending")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+class ProviderImportBody(BaseModel):
+    provider_service_id: str = Field(min_length=1, max_length=40)
+    selling_price_egp: int = Field(ge=1)
+    active: bool = False
+
+def panel_follows_client():
+    from provider_client import PanelFollowsClient
+    key = os.getenv("PANELFOLLOWS_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(503, "مفتاح PanelFollows غير مضبوط في إعدادات الاستضافة")
+    return PanelFollowsClient(key)
+
+@app.get("/api/admin/provider/status")
+def provider_status(_=Depends(admin_only)):
+    try:
+        data = panel_follows_client().balance()
+        return {"connected": True, "balance": data.get("balance"), "currency": data.get("currency", "USD")}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر الاتصال بـ PanelFollows؛ راجع المفتاح والرصيد.")
+
+@app.get("/api/admin/provider/services")
+def provider_services(_=Depends(admin_only)):
+    try:
+        items = panel_follows_client().services()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر تحميل قائمة خدمات المورد.")
+    result = []
+    for item in items:
+        category = str(item.get("category", ""))
+        name = str(item.get("name", ""))
+        if "tiktok" not in (category + " " + name).lower():
+            continue
+        result.append({
+            "provider_service_id": str(item.get("service", "")),
+            "name": name, "category": category, "rate_usd": str(item.get("rate", "0")),
+            "min": int(item.get("min", 1)), "max": int(item.get("max", 100000)),
+            "refill": bool(item.get("refill", False)), "cancel": bool(item.get("cancel", False)),
+            "type": str(item.get("type", "")),
+        })
+    return result
+
+@app.post("/api/admin/provider/import")
+def import_provider_service(body: ProviderImportBody, _=Depends(admin_only),
+                            db: Session = Depends(get_db)):
+    try:
+        items = panel_follows_client().services()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر تحميل قائمة خدمات المورد.")
+    remote = next((x for x in items if str(x.get("service")) == body.provider_service_id), None)
+    if not remote:
+        raise HTTPException(404, "خدمة المورد غير موجودة أو غير متاحة.")
+    category = str(remote.get("category", ""))
+    title = str(remote.get("name", ""))
+    if "tiktok" not in (category + " " + title).lower():
+        raise HTTPException(400, "يمكن استيراد خدمات TikTok فقط من هذا المسار.")
+    if db.scalar(select(ProviderServiceMap).where(
+        ProviderServiceMap.provider_service_id == body.provider_service_id)):
+        raise HTTPException(409, "الخدمة مستوردة بالفعل.")
+    minimum = max(1, int(remote.get("min", 1)))
+    maximum = max(minimum, int(remote.get("max", 100000)))
+    service = Service(platform="tiktok", title=title[:140],
+        description="خدمة موردة عبر PanelFollows؛ السعر بالجنيه المصري لكل 1000.",
+        price=body.selling_price_egp, min_quantity=minimum,
+        max_quantity=maximum, active=body.active)
+    db.add(service)
+    db.flush()
+    db.add(ProviderServiceMap(local_service_id=service.id,
+        provider_service_id=body.provider_service_id,
+        provider_rate_usd=str(remote.get("rate", "0")),
+        provider_min=minimum, provider_max=maximum))
+    db.commit()
+    db.refresh(service)
+    return {"ok": True, "service": service_json(service)}
+
+@app.get("/api/admin/provider/orders")
+def provider_orders(_=Depends(admin_only), db: Session = Depends(get_db)):
+    rows = db.scalars(select(ProviderOrderMap).order_by(ProviderOrderMap.id.desc()).limit(100)).all()
+    return [{"local_order_id": x.local_order_id, "provider_order_id": x.provider_order_id,
+             "provider_status": x.provider_status} for x in rows]
+
+@app.post("/api/admin/provider/orders/{local_order_id}/sync")
+def sync_provider_order(local_order_id: int, _=Depends(admin_only), db: Session = Depends(get_db)):
+    mapping = db.scalar(select(ProviderOrderMap).where(
+        ProviderOrderMap.local_order_id == local_order_id))
+    order = db.get(Order, local_order_id)
+    if not mapping or not order:
+        raise HTTPException(404, "طلب المورد غير موجود.")
+    try:
+        data = panel_follows_client().status(mapping.provider_order_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "تعذر جلب حالة الطلب من المورد.")
+    remote_status = str(data.get("status", "Unknown"))
+    mapping.provider_status = remote_status
+    normalized = remote_status.lower()
+    terminal_statuses = {"completed", "cancelled", "rejected"}
+    if normalized == "completed" and order.status not in terminal_statuses:
+        order.status = "completed"
+    elif normalized in {"pending", "in progress"} and order.status not in terminal_statuses:
+        order.status = "processing"
+    elif normalized in {"canceled", "cancelled"}:
+        if order.status not in {"cancelled", "rejected", "completed"}:
+            wallet = db.scalar(select(Wallet).where(
+                Wallet.customer_id == order.customer_id).with_for_update())
+            refund_ref = f"refund:provider-cancel:{order.id}"
+            if wallet and not db.scalar(select(WalletTransaction).where(
+                    WalletTransaction.reference == refund_ref)):
+                wallet.balance += order.total_price
+                db.add(WalletTransaction(customer_id=order.customer_id,
+                    amount=order.total_price, balance_after=wallet.balance,
+                    kind="refund", reference=refund_ref,
+                    note=f"استرداد إلغاء المورد للطلب #{order.id}"))
+            order.status = "cancelled"
+            order.admin_note = "ألغى المورد الطلب وتم رد المبلغ للمحفظة."
+    elif normalized == "partial":
+        order.admin_note = f"المورد أبلغ أن الطلب جزئي؛ المتبقي: {data.get('remains', 'غير معروف')}"
+    db.commit()
+    return {"ok": True, "order": order_json(order),
+            "provider_status": remote_status, "provider_charge_usd": data.get("charge"),
+            "provider_remains": data.get("remains")}
