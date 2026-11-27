@@ -33,9 +33,9 @@ $("loginForm").addEventListener("submit", async e => {
 $("logoutBtn").addEventListener("click",async()=>{await api("/api/logout",{method:"POST"});location.reload();});
 $("refreshBtn").addEventListener("click",()=>loadDashboard().catch(e=>alert(e.message)));
 $("serviceForm").addEventListener("submit",async e=>{
-  e.preventDefault();const f=new FormData(e.currentTarget);
+  e.preventDefault();const form=e.currentTarget;const f=new FormData(form);
   const body={platform:f.get("platform"),title:f.get("title"),description:f.get("description"),price:Number(f.get("price")),min_quantity:Number(f.get("min_quantity")),max_quantity:Number(f.get("max_quantity")),active:true};
-  try{await api("/api/admin/services",{method:"POST",body:JSON.stringify(body)});e.currentTarget.reset();showMessage("serviceMessage","تمت إضافة الخدمة.");await loadDashboard();}
+  try{await api("/api/admin/services",{method:"POST",body:JSON.stringify(body)});form.reset();showMessage("serviceMessage","تمت إضافة الخدمة.");await loadDashboard();}
   catch(err){showMessage("serviceMessage",err.message);}
 });
 document.addEventListener("click",async e=>{
