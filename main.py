@@ -232,8 +232,8 @@ def create_order(body: OrderBody, user: Customer = Depends(current_user), db: Se
     total = (service.price * body.quantity + 999) // 1000
     if total < 1:
         raise HTTPException(400, "قيمة الطلب غير صحيحة")
-    wallet = db.scalar(select(Wallet).where(Wallet.customer_id == user.id).with_for_update())
-    if not wallet or wallet.balance < total:
+    wallet = wallet_for(db, user.id)
+    if wallet.balance < total:
         raise HTTPException(400, "رصيدك غير كافٍ. اشحن محفظتك أولاً.")
     wallet.balance -= total
     order = Order(customer_id=user.id, service_id=service.id, service_title=service.title,
@@ -387,7 +387,10 @@ def transaction_json(item):
 
 def deposit_json(item):
     customer = item.customer_id
-    return {"id": item.id, "customer_id": customer, "amount": item.amount,
+    owner = db.get(Customer, customer)
+    return {"id": item.id, "customer_id": customer,
+            "customer_name": owner.name if owner else "", "customer_email": owner.email if owner else "",
+            "customer_phone": owner.phone if owner else "", "amount": item.amount,
             "method": item.method, "sender_reference": item.sender_reference,
             "status": item.status, "admin_note": item.admin_note,
             "created_at": item.created_at.isoformat()}
