@@ -13,3 +13,5 @@ async function load(){try{await api("/api/me");const data=await api("/api/wallet
 $("walletLogin").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.currentTarget);try{await api("/api/login",{method:"POST",body:JSON.stringify({email:f.get("email"),password:f.get("password")})});location.reload()}catch(err){$("loginFeedback").textContent=err.message}});
 $("depositForm").addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.currentTarget);$("feedback").textContent="جاري إرسال الطلب...";try{const d=await api("/api/deposits",{method:"POST",body:JSON.stringify({amount:Number(f.get("amount")),method:f.get("method"),sender_reference:f.get("sender_reference")})});$("feedback").textContent=d.message;e.currentTarget.reset();await load()}catch(err){$("feedback").textContent=err.message}});
 load();
+
+document.querySelectorAll(".copy-number").forEach(button=>button.addEventListener("click",async()=>{try{await navigator.clipboard.writeText(button.dataset.copy);button.textContent="تم النسخ";setTimeout(()=>button.textContent="نسخ الرقم",1600)}catch(_){button.textContent="انسخ الرقم يدويًا"}}));
