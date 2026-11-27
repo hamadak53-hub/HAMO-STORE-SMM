@@ -12,7 +12,7 @@ async function loadDashboard() {
   $("ordersCount").textContent = summary.orders;
   $("pendingCount").textContent = summary.pending;
   $("revenueCount").textContent = summary.revenue.toLocaleString("ar-EG");
-  const [orders, services] = await Promise.all([api("/api/admin/orders"), api("/api/services?include=all")]);
+  const [orders, services] = await Promise.all([api("/api/admin/orders"), api("/api/admin/services")]);
   renderOrders(orders);
   renderServices(services);
 }
